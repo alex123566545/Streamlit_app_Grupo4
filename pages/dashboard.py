@@ -2,25 +2,6 @@
 # SIPREM-BOVINO
 # DASHBOARD DE RIESGO DE MORTALIDAD
 # ============================================================
-#
-# Este dashboard se enfoca exclusivamente en:
-#
-#   - Riesgo de mortalidad predicho
-#   - Probabilidad estimada
-#   - Clasificación ALTO / BAJO
-#   - Evolución temporal
-#   - Comportamiento por lote
-#   - Comparación predicción vs desenlace real
-#
-# Fuente:
-#   gold_ml.predicciones
-#
-# ============================================================
-
-
-# ============================================================
-# IMPORTACIONES
-# ============================================================
 
 import streamlit as st
 import pandas as pd
@@ -32,11 +13,11 @@ from utils.database import get_connection
 
 
 # ============================================================
-# CONFIGURACIÓN DE STREAMLIT
+# CONFIGURACIÓN
 # ============================================================
 
 st.set_page_config(
-    page_title="SIPREM-BOVINO | Riesgo de Mortalidad",
+    page_title="SIPREM-BOVINO | Riesgo",
     page_icon="🐄",
     layout="wide"
 )
@@ -49,17 +30,17 @@ st.set_page_config(
 st.title("🐄 SIPREM-BOVINO")
 
 st.subheader(
-    "Dashboard de riesgo de mortalidad bovina"
+    "Análisis comparativo del riesgo de mortalidad"
 )
 
 st.caption(
-    "Visualización de predicciones generadas por el modelo "
-    "Random Forest para un horizonte de 4 semanas."
+    "Comparación entre predicciones de riesgo ALTO y BAJO "
+    "generadas por el modelo Random Forest."
 )
 
 
 # ============================================================
-# FUNCIÓN PARA CARGAR LOS DATOS
+# CARGAR DATOS
 # ============================================================
 
 @st.cache_data(ttl=60)
@@ -72,7 +53,7 @@ def cargar_predicciones():
         query = """
             SELECT *
             FROM gold_ml.predicciones
-            ORDER BY fecha DESC
+            ORDER BY fecha
         """
 
         df = pd.read_sql(
@@ -88,7 +69,7 @@ def cargar_predicciones():
 
 
 # ============================================================
-# CARGAR DATOS
+# CONEXIÓN
 # ============================================================
 
 try:
@@ -98,7 +79,7 @@ try:
 except Exception as e:
 
     st.error(
-        "❌ No fue posible conectarse con Supabase."
+        "❌ Error al cargar las predicciones."
     )
 
     st.exception(e)
@@ -107,43 +88,30 @@ except Exception as e:
 
 
 # ============================================================
-# VALIDAR DATASET
+# VALIDACIÓN
 # ============================================================
 
 if df.empty:
 
     st.warning(
-        "⚠️ No existen predicciones registradas "
-        "en gold_ml.predicciones."
+        "No existen predicciones registradas."
     )
 
     st.stop()
 
 
 # ============================================================
-# COPIA DE SEGURIDAD
+# PREPARACIÓN
 # ============================================================
 
 df = df.copy()
 
-
-# ============================================================
-# PREPARACIÓN DE DATOS
-# ============================================================
-
-# ------------------------------------------------------------
-# FECHA
-# ------------------------------------------------------------
 
 df["fecha"] = pd.to_datetime(
     df["fecha"],
     errors="coerce"
 )
 
-
-# ------------------------------------------------------------
-# PROBABILIDAD
-# ------------------------------------------------------------
 
 df[
     "probabilidad_riesgo_predicha"
@@ -155,27 +123,30 @@ df[
 )
 
 
-# Eliminar probabilidades inválidas
-df = df[
-    df[
-        "probabilidad_riesgo_predicha"
-    ].notna()
-].copy()
-
-
 # ------------------------------------------------------------
-# RIESGO PREDICHO
+# NORMALIZAR BOOLEANOS
 # ------------------------------------------------------------
 
-def convertir_booleano(valor):
+def normalizar_bool(valor):
 
     if pd.isna(valor):
+
         return False
 
     if isinstance(valor, bool):
+
         return valor
 
-    if isinstance(valor, (int, float, np.integer, np.floating)):
+    if isinstance(
+        valor,
+        (
+            int,
+            float,
+            np.integer,
+            np.floating
+        )
+    ):
+
         return bool(valor)
 
     valor = str(valor).strip().lower()
@@ -194,12 +165,12 @@ df[
 ] = df[
     "riesgo_alto_predicho"
 ].apply(
-    convertir_booleano
+    normalizar_bool
 )
 
 
 # ------------------------------------------------------------
-# NIVEL DE RIESGO
+# NIVEL
 # ------------------------------------------------------------
 
 df["nivel_riesgo"] = np.where(
@@ -210,7 +181,7 @@ df["nivel_riesgo"] = np.where(
 
 
 # ------------------------------------------------------------
-# PORCENTAJE
+# PROBABILIDAD %
 # ------------------------------------------------------------
 
 df["probabilidad_pct"] = (
@@ -224,7 +195,41 @@ df["probabilidad_pct"] = (
 # SIDEBAR
 # ============================================================
 
-st.sidebar.header("🔎 Filtros")
+st.sidebar.header(
+    "🔎 Filtros"
+)
+
+
+# ============================================================
+# FILTRO DE LOTES
+# ============================================================
+
+lotes = sorted(
+    df[
+        "id_lote"
+    ]
+    .dropna()
+    .astype(str)
+    .unique()
+)
+
+
+lotes_seleccionados = st.sidebar.multiselect(
+    "Lotes",
+    lotes,
+    default=lotes
+)
+
+
+# ============================================================
+# FILTRO DE RIESGO
+# ============================================================
+
+niveles_seleccionados = st.sidebar.multiselect(
+    "Nivel de riesgo",
+    ["ALTO", "BAJO"],
+    default=["ALTO", "BAJO"]
+)
 
 
 # ============================================================
@@ -240,7 +245,6 @@ if "modelo_utilizado" in df.columns:
         .dropna()
         .astype(str)
         .unique()
-        .tolist()
     )
 
 else:
@@ -262,52 +266,19 @@ else:
 
 
 # ============================================================
-# FILTRO DE LOTE
-# ============================================================
-
-lotes = sorted(
-    df[
-        "id_lote"
-    ]
-    .dropna()
-    .astype(str)
-    .unique()
-    .tolist()
-)
-
-
-lotes_seleccionados = st.sidebar.multiselect(
-    "Lotes",
-    lotes,
-    default=lotes
-)
-
-
-# ============================================================
-# FILTRO DE NIVEL DE RIESGO
-# ============================================================
-
-niveles_seleccionados = st.sidebar.multiselect(
-    "Nivel de riesgo",
-    ["ALTO", "BAJO"],
-    default=["ALTO", "BAJO"]
-)
-
-
-# ============================================================
 # FILTRO DE FECHA
 # ============================================================
 
-fecha_valida = df[
+fechas = df[
     "fecha"
 ].dropna()
 
 
-if not fecha_valida.empty:
+if not fechas.empty:
 
-    fecha_min = fecha_valida.min().date()
+    fecha_min = fechas.min().date()
 
-    fecha_max = fecha_valida.max().date()
+    fecha_max = fechas.max().date()
 
     rango_fecha = st.sidebar.date_input(
         "Rango de fechas",
@@ -331,25 +302,6 @@ else:
 df_filtrado = df.copy()
 
 
-# ------------------------------------------------------------
-# MODELO
-# ------------------------------------------------------------
-
-if modelos_seleccionados:
-
-    df_filtrado = df_filtrado[
-        df_filtrado[
-            "modelo_utilizado"
-        ].isin(
-            modelos_seleccionados
-        )
-    ]
-
-
-# ------------------------------------------------------------
-# LOTE
-# ------------------------------------------------------------
-
 if lotes_seleccionados:
 
     df_filtrado = df_filtrado[
@@ -360,10 +312,6 @@ if lotes_seleccionados:
         )
     ]
 
-
-# ------------------------------------------------------------
-# NIVEL DE RIESGO
-# ------------------------------------------------------------
 
 if niveles_seleccionados:
 
@@ -376,9 +324,16 @@ if niveles_seleccionados:
     ]
 
 
-# ------------------------------------------------------------
-# FECHA
-# ------------------------------------------------------------
+if modelos_seleccionados:
+
+    df_filtrado = df_filtrado[
+        df_filtrado[
+            "modelo_utilizado"
+        ].isin(
+            modelos_seleccionados
+        )
+    ]
+
 
 if (
     rango_fecha is not None
@@ -410,20 +365,20 @@ if (
 
 
 # ============================================================
-# VALIDAR FILTROS
+# VALIDACIÓN
 # ============================================================
 
 if df_filtrado.empty:
 
     st.warning(
-        "⚠️ No existen registros con los filtros seleccionados."
+        "No existen registros para los filtros seleccionados."
     )
 
     st.stop()
 
 
 # ============================================================
-# OBTENER UMBRAL
+# UMBRAL
 # ============================================================
 
 if "umbral_utilizado" in df_filtrado.columns:
@@ -451,114 +406,115 @@ else:
 
 
 # ============================================================
-# INDICADORES GENERALES
+# INDICADORES
 # ============================================================
 
-total_predicciones = len(
+total = len(
     df_filtrado
 )
 
 
-total_lotes = df_filtrado[
-    "id_lote"
-].nunique()
-
-
-total_alto = int(
+alto = int(
     df_filtrado[
         "riesgo_alto_predicho"
     ].sum()
 )
 
 
-total_bajo = (
-    total_predicciones
-    - total_alto
+bajo = (
+    total - alto
 )
 
 
 porcentaje_alto = (
-    total_alto
-    /
-    total_predicciones
-    * 100
+    alto / total * 100
 )
 
 
-probabilidad_promedio = (
+porcentaje_bajo = (
+    bajo / total * 100
+)
+
+
+promedio_alto = (
     df_filtrado[
+        df_filtrado[
+            "nivel_riesgo"
+        ] == "ALTO"
+    ][
         "probabilidad_riesgo_predicha"
     ].mean()
-    * 100
 )
 
 
-probabilidad_maxima = (
+promedio_bajo = (
     df_filtrado[
+        df_filtrado[
+            "nivel_riesgo"
+        ] == "BAJO"
+    ][
         "probabilidad_riesgo_predicha"
-    ].max()
-    * 100
-)
-
-
-probabilidad_minima = (
-    df_filtrado[
-        "probabilidad_riesgo_predicha"
-    ].min()
-    * 100
+    ].mean()
 )
 
 
 # ============================================================
-# SECCIÓN 1
-# INDICADORES PRINCIPALES
+# KPI
 # ============================================================
 
 st.header(
-    "📊 Indicadores generales de riesgo"
+    "📊 Resumen general"
 )
 
 
-col1, col2, col3, col4, col5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 
 
-with col1:
+with c1:
 
     st.metric(
-        "Predicciones",
-        f"{total_predicciones:,}"
+        "Total",
+        f"{total:,}"
     )
 
 
-with col2:
+with c2:
 
     st.metric(
-        "Lotes",
-        f"{total_lotes:,}"
+        "ALTO",
+        f"{alto:,}"
     )
 
 
-with col3:
+with c3:
 
     st.metric(
-        "Riesgo ALTO",
-        f"{total_alto:,}"
-    )
-
-
-with col4:
-
-    st.metric(
-        "% Riesgo ALTO",
+        "% ALTO",
         f"{porcentaje_alto:.1f}%"
     )
 
 
-with col5:
+with c4:
 
     st.metric(
-        "Probabilidad promedio",
-        f"{probabilidad_promedio:.1f}%"
+        "BAJO",
+        f"{bajo:,}"
+    )
+
+
+with c5:
+
+    st.metric(
+        "% BAJO",
+        f"{porcentaje_bajo:.1f}%"
+    )
+
+
+with c6:
+
+    st.metric(
+        "Umbral",
+        f"{umbral:.2f}"
     )
 
 
@@ -566,112 +522,39 @@ st.divider()
 
 
 # ============================================================
-# SECCIÓN 2
-# DISTRIBUCIÓN ALTO / BAJO
+# 1. ALTO VS BAJO
 # ============================================================
 
 st.header(
-    "1️⃣ Distribución del riesgo de mortalidad"
+    "1️⃣ Comparación ALTO vs BAJO"
 )
 
 
-col1, col2 = st.columns(2)
+datos = pd.DataFrame({
+    "Nivel": [
+        "ALTO",
+        "BAJO"
+    ],
+
+    "Cantidad": [
+        alto,
+        bajo
+    ]
+})
 
 
-# ------------------------------------------------------------
-# BARRAS
-# ------------------------------------------------------------
-
-with col1:
-
-    datos_riesgo = pd.DataFrame({
-        "nivel": [
-            "ALTO",
-            "BAJO"
-        ],
-
-        "cantidad": [
-            total_alto,
-            total_bajo
-        ]
-    })
-
-
-    fig = px.bar(
-        datos_riesgo,
-        x="nivel",
-        y="cantidad",
-        text="cantidad",
-        title="Cantidad de predicciones por nivel de riesgo"
-    )
-
-
-    fig.update_layout(
-        xaxis_title="Nivel de riesgo",
-        yaxis_title="Cantidad"
-    )
-
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-# ------------------------------------------------------------
-# DONA
-# ------------------------------------------------------------
-
-with col2:
-
-    fig = px.pie(
-        datos_riesgo,
-        names="nivel",
-        values="cantidad",
-        hole=0.55,
-        title="Proporción de riesgo de mortalidad"
-    )
-
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-# ============================================================
-# SECCIÓN 3
-# DISTRIBUCIÓN DE PROBABILIDADES
-# ============================================================
-
-st.header(
-    "2️⃣ Distribución de la probabilidad de mortalidad"
-)
-
-
-fig = px.histogram(
-    df_filtrado,
-    x="probabilidad_pct",
-    nbins=20,
-    marginal="box",
-    title=(
-        "Distribución de las probabilidades "
-        "estimadas por el modelo"
-    )
-)
-
-
-fig.add_vline(
-    x=umbral * 100,
-    line_dash="dash",
-    annotation_text=(
-        f"Umbral = {umbral:.2f}"
-    )
+fig = px.bar(
+    datos,
+    x="Nivel",
+    y="Cantidad",
+    color="Nivel",
+    text="Cantidad",
+    title="Cantidad de predicciones ALTO y BAJO"
 )
 
 
 fig.update_layout(
-    xaxis_title="Probabilidad de riesgo (%)",
+    xaxis_title="Nivel de riesgo",
     yaxis_title="Número de predicciones"
 )
 
@@ -683,30 +566,144 @@ st.plotly_chart(
 
 
 # ============================================================
-# SECCIÓN 4
-# EVOLUCIÓN TEMPORAL
+# 2. PROPORCIÓN
 # ============================================================
 
 st.header(
-    "3️⃣ Evolución temporal del riesgo"
+    "2️⃣ Proporción ALTO vs BAJO"
+)
+
+
+fig = px.pie(
+    datos,
+    names="Nivel",
+    values="Cantidad",
+    hole=0.55,
+    title="Distribución proporcional de las predicciones"
+)
+
+
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+
+
+# ============================================================
+# 3. DISTRIBUCIÓN DE PROBABILIDADES
+# ============================================================
+
+st.header(
+    "3️⃣ Distribución de probabilidades ALTO y BAJO"
+)
+
+
+fig = px.histogram(
+    df_filtrado,
+    x="probabilidad_pct",
+    color="nivel_riesgo",
+    nbins=20,
+    barmode="overlay",
+    opacity=0.7,
+    title=(
+        "Distribución de probabilidades "
+        "según clasificación"
+    )
+)
+
+
+fig.add_vline(
+    x=umbral * 100,
+    line_dash="dash",
+    annotation_text=(
+        f"Umbral {umbral:.2f}"
+    )
+)
+
+
+fig.update_layout(
+    xaxis_title="Probabilidad (%)",
+    yaxis_title="Cantidad"
+)
+
+
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+
+
+# ============================================================
+# 4. BOX PLOT
+# ============================================================
+
+st.header(
+    "4️⃣ Distribución estadística ALTO vs BAJO"
+)
+
+
+fig = px.box(
+    df_filtrado,
+    x="nivel_riesgo",
+    y="probabilidad_pct",
+    color="nivel_riesgo",
+    points="all",
+    category_orders={
+        "nivel_riesgo": [
+            "BAJO",
+            "ALTO"
+        ]
+    },
+    title=(
+        "Comparación de probabilidades "
+        "entre ALTO y BAJO"
+    )
+)
+
+
+fig.add_hline(
+    y=umbral * 100,
+    line_dash="dash",
+    annotation_text="Umbral"
+)
+
+
+fig.update_layout(
+    xaxis_title="Clasificación",
+    yaxis_title="Probabilidad (%)"
+)
+
+
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+
+
+# ============================================================
+# 5. EVOLUCIÓN TEMPORAL ALTO VS BAJO
+# ============================================================
+
+st.header(
+    "5️⃣ Evolución temporal ALTO vs BAJO"
 )
 
 
 evolucion = (
     df_filtrado
-    .groupby("fecha")
+    .groupby(
+        [
+            "fecha",
+            "nivel_riesgo"
+        ]
+    )
     .agg(
         probabilidad_promedio=(
             "probabilidad_riesgo_predicha",
             "mean"
         ),
 
-        cantidad_alto=(
-            "riesgo_alto_predicho",
-            "sum"
-        ),
-
-        total=(
+        cantidad=(
             "id_lote",
             "count"
         )
@@ -724,32 +721,15 @@ evolucion[
 )
 
 
-evolucion[
-    "porcentaje_alto"
-] = (
-    evolucion[
-        "cantidad_alto"
-    ]
-    /
-    evolucion[
-        "total"
-    ]
-    * 100
-)
-
-
-# ------------------------------------------------------------
-# PROBABILIDAD PROMEDIO
-# ------------------------------------------------------------
-
 fig = px.line(
     evolucion,
     x="fecha",
     y="probabilidad_pct",
+    color="nivel_riesgo",
     markers=True,
     title=(
-        "Evolución de la probabilidad "
-        "promedio de riesgo"
+        "Evolución de la probabilidad promedio "
+        "para ALTO y BAJO"
     )
 )
 
@@ -757,9 +737,7 @@ fig = px.line(
 fig.add_hline(
     y=umbral * 100,
     line_dash="dash",
-    annotation_text=(
-        f"Umbral {umbral:.2f}"
-    )
+    annotation_text="Umbral"
 )
 
 
@@ -775,25 +753,32 @@ st.plotly_chart(
 )
 
 
-# ------------------------------------------------------------
-# ALERTAS ALTAS
-# ------------------------------------------------------------
+# ============================================================
+# 6. CANTIDAD ALTO VS BAJO POR FECHA
+# ============================================================
+
+st.header(
+    "6️⃣ Cantidad de predicciones ALTO y BAJO por fecha"
+)
+
 
 fig = px.bar(
     evolucion,
     x="fecha",
-    y="cantidad_alto",
-    text="cantidad_alto",
+    y="cantidad",
+    color="nivel_riesgo",
+    barmode="group",
+    text="cantidad",
     title=(
-        "Cantidad de predicciones clasificadas "
-        "como riesgo ALTO por fecha"
+        "Comparación temporal de predicciones "
+        "ALTO y BAJO"
     )
 )
 
 
 fig.update_layout(
     xaxis_title="Fecha",
-    yaxis_title="Cantidad de alertas"
+    yaxis_title="Cantidad"
 )
 
 
@@ -804,134 +789,115 @@ st.plotly_chart(
 
 
 # ============================================================
-# SECCIÓN 5
-# PORCENTAJE ALTO POR FECHA
+# 7. PORCENTAJE ALTO VS BAJO POR FECHA
 # ============================================================
 
 st.header(
-    "4️⃣ Porcentaje de riesgo ALTO a lo largo del tiempo"
+    "7️⃣ Proporción ALTO vs BAJO por fecha"
 )
 
 
-fig = px.area(
-    evolucion,
-    x="fecha",
-    y="porcentaje_alto",
-    title=(
-        "Proporción de predicciones de riesgo ALTO"
-    )
-)
-
-
-fig.update_layout(
-    xaxis_title="Fecha",
-    yaxis_title="Riesgo ALTO (%)"
-)
-
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-
-# ============================================================
-# SECCIÓN 6
-# RIESGO POR LOTE
-# ============================================================
-
-st.header(
-    "5️⃣ Riesgo de mortalidad por lote"
-)
-
-
-riesgo_lote = (
+proporcion = (
     df_filtrado
-    .groupby("id_lote")
-    .agg(
-        total_predicciones=(
-            "id_lote",
-            "count"
-        ),
-
-        alertas_alto=(
-            "riesgo_alto_predicho",
-            "sum"
-        ),
-
-        probabilidad_promedio=(
-            "probabilidad_riesgo_predicha",
-            "mean"
-        ),
-
-        probabilidad_maxima=(
-            "probabilidad_riesgo_predicha",
-            "max"
-        )
+    .groupby(
+        [
+            "fecha",
+            "nivel_riesgo"
+        ]
     )
-    .reset_index()
+    .size()
+    .reset_index(
+        name="cantidad"
+    )
 )
 
 
-riesgo_lote[
-    "porcentaje_alto"
+totales_fecha = (
+    proporcion
+    .groupby("fecha")[
+        "cantidad"
+    ]
+    .transform("sum")
+)
+
+
+proporcion[
+    "porcentaje"
 ] = (
-    riesgo_lote[
-        "alertas_alto"
+    proporcion[
+        "cantidad"
     ]
     /
-    riesgo_lote[
-        "total_predicciones"
-    ]
+    totales_fecha
     * 100
 )
 
 
-riesgo_lote[
-    "probabilidad_promedio_pct"
-] = (
-    riesgo_lote[
-        "probabilidad_promedio"
-    ] * 100
-)
-
-
-riesgo_lote[
-    "probabilidad_maxima_pct"
-] = (
-    riesgo_lote[
-        "probabilidad_maxima"
-    ] * 100
-)
-
-
-# ------------------------------------------------------------
-# GRÁFICO 1
-# ------------------------------------------------------------
-
-fig = px.bar(
-    riesgo_lote.sort_values(
-        "porcentaje_alto",
-        ascending=False
-    ),
-    x="id_lote",
-    y="porcentaje_alto",
-    text="porcentaje_alto",
+fig = px.area(
+    proporcion,
+    x="fecha",
+    y="porcentaje",
+    color="nivel_riesgo",
+    groupnorm="fraction",
     title=(
-        "Porcentaje de predicciones de "
-        "riesgo ALTO por lote"
+        "Proporción de ALTO y BAJO "
+        "a lo largo del tiempo"
     )
 )
 
 
-fig.update_traces(
-    texttemplate="%{text:.1f}%"
+fig.update_layout(
+    xaxis_title="Fecha",
+    yaxis_title="Porcentaje (%)"
+)
+
+
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+
+
+# ============================================================
+# 8. RIESGO POR LOTE ALTO VS BAJO
+# ============================================================
+
+st.header(
+    "8️⃣ Distribución ALTO vs BAJO por lote"
+)
+
+
+lote_riesgo = (
+    df_filtrado
+    .groupby(
+        [
+            "id_lote",
+            "nivel_riesgo"
+        ]
+    )
+    .size()
+    .reset_index(
+        name="cantidad"
+    )
+)
+
+
+fig = px.bar(
+    lote_riesgo,
+    x="id_lote",
+    y="cantidad",
+    color="nivel_riesgo",
+    barmode="group",
+    title=(
+        "Comparación de predicciones ALTO y BAJO "
+        "por lote"
+    )
 )
 
 
 fig.update_layout(
     xaxis_title="Lote",
-    yaxis_title="% Riesgo ALTO"
+    yaxis_title="Cantidad"
 )
 
 
@@ -941,39 +907,68 @@ st.plotly_chart(
 )
 
 
-# ------------------------------------------------------------
-# GRÁFICO 2
-# ------------------------------------------------------------
+# ============================================================
+# 9. PORCENTAJE POR LOTE
+# ============================================================
 
-fig = px.bar(
-    riesgo_lote.sort_values(
-        "probabilidad_promedio_pct",
-        ascending=False
-    ),
-    x="id_lote",
-    y="probabilidad_promedio_pct",
-    text="probabilidad_promedio_pct",
-    title=(
-        "Probabilidad promedio de riesgo por lote"
+st.header(
+    "9️⃣ Porcentaje ALTO y BAJO dentro de cada lote"
+)
+
+
+porcentaje_lote = (
+    df_filtrado
+    .groupby(
+        [
+            "id_lote",
+            "nivel_riesgo"
+        ]
+    )
+    .size()
+    .reset_index(
+        name="cantidad"
     )
 )
 
 
-fig.update_traces(
-    texttemplate="%{text:.1f}%"
+totales_lote = (
+    porcentaje_lote
+    .groupby("id_lote")[
+        "cantidad"
+    ]
+    .transform("sum")
 )
 
 
-fig.add_hline(
-    y=umbral * 100,
-    line_dash="dash",
-    annotation_text="Umbral"
+porcentaje_lote[
+    "porcentaje"
+] = (
+    porcentaje_lote[
+        "cantidad"
+    ]
+    /
+    totales_lote
+    * 100
+)
+
+
+fig = px.bar(
+    porcentaje_lote,
+    x="id_lote",
+    y="porcentaje",
+    color="nivel_riesgo",
+    barmode="stack",
+    text="porcentaje",
+    title=(
+        "Composición porcentual ALTO / BAJO "
+        "por lote"
+    )
 )
 
 
 fig.update_layout(
     xaxis_title="Lote",
-    yaxis_title="Probabilidad promedio (%)"
+    yaxis_title="Porcentaje (%)"
 )
 
 
@@ -984,71 +979,11 @@ st.plotly_chart(
 
 
 # ============================================================
-# SECCIÓN 7
-# TOP 10 LOTES
+# 10. MAPA DE CALOR
 # ============================================================
 
 st.header(
-    "6️⃣ Ranking de lotes con mayor riesgo"
-)
-
-
-top_lotes = (
-    riesgo_lote
-    .sort_values(
-        "probabilidad_promedio_pct",
-        ascending=False
-    )
-    .head(10)
-)
-
-
-fig = px.bar(
-    top_lotes.sort_values(
-        "probabilidad_promedio_pct"
-    ),
-    x="probabilidad_promedio_pct",
-    y="id_lote",
-    orientation="h",
-    text="probabilidad_promedio_pct",
-    title=(
-        "Top 10 lotes con mayor "
-        "probabilidad promedio de riesgo"
-    )
-)
-
-
-fig.update_traces(
-    texttemplate="%{text:.1f}%"
-)
-
-
-fig.add_vline(
-    x=umbral * 100,
-    line_dash="dash",
-    annotation_text="Umbral"
-)
-
-
-fig.update_layout(
-    xaxis_title="Probabilidad promedio (%)",
-    yaxis_title="Lote"
-)
-
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-
-# ============================================================
-# SECCIÓN 8
-# MAPA DE CALOR
-# ============================================================
-
-st.header(
-    "7️⃣ Mapa temporal del riesgo por lote"
+    "🔟 Mapa de riesgo por lote y fecha"
 )
 
 
@@ -1059,9 +994,7 @@ heatmap = (
             "id_lote",
             "fecha"
         ]
-    )[
-        "probabilidad_riesgo_predicha"
-    ]
+    )["probabilidad_riesgo_predicha"]
     .mean()
     .reset_index()
 )
@@ -1089,7 +1022,7 @@ fig = go.Figure(
         x=pivot.columns,
         y=pivot.index,
         colorbar=dict(
-            title="Riesgo (%)"
+            title="Probabilidad (%)"
         ),
         hovertemplate=(
             "Lote: %{y}<br>"
@@ -1103,7 +1036,7 @@ fig = go.Figure(
 
 fig.update_layout(
     title=(
-        "Probabilidad de riesgo de mortalidad "
+        "Probabilidad estimada de riesgo "
         "por lote y fecha"
     ),
     xaxis_title="Fecha",
@@ -1118,30 +1051,47 @@ st.plotly_chart(
 
 
 # ============================================================
-# SECCIÓN 9
-# BOXPLOT
+# 11. PROBABILIDAD PROMEDIO ALTO VS BAJO
 # ============================================================
 
 st.header(
-    "8️⃣ Distribución de probabilidad según clasificación"
+    "1️⃣1️⃣ Probabilidad promedio por clasificación"
 )
 
 
-fig = px.box(
-    df_filtrado,
-    x="nivel_riesgo",
-    y="probabilidad_pct",
-    points="outliers",
-    category_orders={
-        "nivel_riesgo": [
-            "BAJO",
-            "ALTO"
-        ]
-    },
+promedios = pd.DataFrame({
+    "Nivel": [
+        "BAJO",
+        "ALTO"
+    ],
+
+    "Probabilidad": [
+        promedio_bajo * 100
+        if not pd.isna(promedio_bajo)
+        else 0,
+
+        promedio_alto * 100
+        if not pd.isna(promedio_alto)
+        else 0
+    ]
+})
+
+
+fig = px.bar(
+    promedios,
+    x="Nivel",
+    y="Probabilidad",
+    color="Nivel",
+    text="Probabilidad",
     title=(
-        "Probabilidad estimada según "
-        "la clasificación del modelo"
+        "Probabilidad promedio estimada "
+        "según clasificación"
     )
+)
+
+
+fig.update_traces(
+    texttemplate="%{text:.1f}%"
 )
 
 
@@ -1153,8 +1103,8 @@ fig.add_hline(
 
 
 fig.update_layout(
-    xaxis_title="Clasificación",
-    yaxis_title="Probabilidad (%)"
+    xaxis_title="Nivel",
+    yaxis_title="Probabilidad promedio (%)"
 )
 
 
@@ -1165,12 +1115,11 @@ st.plotly_chart(
 
 
 # ============================================================
-# SECCIÓN 10
-# DISTANCIA AL UMBRAL
+# 12. PREDICCIONES CERCANAS AL UMBRAL
 # ============================================================
 
 st.header(
-    "9️⃣ Predicciones cercanas al umbral"
+    "1️⃣2️⃣ Predicciones cercanas al umbral"
 )
 
 
@@ -1190,13 +1139,13 @@ cercanas = (
     .sort_values(
         "distancia_umbral"
     )
-    .head(20)
+    .head(30)
     .copy()
 )
 
 
 cercanas[
-    "distancia_umbral_pct"
+    "distancia_pct"
 ] = (
     cercanas[
         "distancia_umbral"
@@ -1204,22 +1153,20 @@ cercanas[
 )
 
 
-fig = px.bar(
-    cercanas.sort_values(
-        "probabilidad_pct"
-    ),
+fig = px.scatter(
+    cercanas,
     x="probabilidad_pct",
     y="id_lote",
     color="nivel_riesgo",
-    orientation="h",
+    size="distancia_pct",
     hover_data=[
         "fecha",
         "probabilidad_pct",
-        "distancia_umbral_pct"
+        "distancia_pct"
     ],
     title=(
-        "Predicciones más cercanas al "
-        "umbral de decisión"
+        "Predicciones más cercanas "
+        "al punto de decisión"
     )
 )
 
@@ -1244,87 +1191,182 @@ st.plotly_chart(
 
 
 # ============================================================
-# SECCIÓN 11
-# MORTALIDAD REAL VS PREDICHA
+# 13. TABLA DE RESUMEN
 # ============================================================
 
-columnas_reales = [
-    "verificado",
-    "target_riesgo_alto_4sem_real"
-]
-
-
-existen_columnas_reales = all(
-    col in df_filtrado.columns
-    for col in columnas_reales
+st.header(
+    "1️⃣3️⃣ Resumen comparativo"
 )
 
 
-if existen_columnas_reales:
+tabla = (
+    df_filtrado
+    .groupby("nivel_riesgo")
+    .agg(
+        predicciones=(
+            "id_lote",
+            "count"
+        ),
 
-    df_verificado = df_filtrado[
-        df_filtrado[
-            "verificado"
-        ].apply(convertir_booleano)
+        lotes=(
+            "id_lote",
+            "nunique"
+        ),
+
+        probabilidad_promedio=(
+            "probabilidad_riesgo_predicha",
+            "mean"
+        ),
+
+        probabilidad_minima=(
+            "probabilidad_riesgo_predicha",
+            "min"
+        ),
+
+        probabilidad_maxima=(
+            "probabilidad_riesgo_predicha",
+            "max"
+        )
+    )
+    .reset_index()
+)
+
+
+tabla[
+    "porcentaje_total"
+] = (
+    tabla[
+        "predicciones"
+    ]
+    /
+    total
+    * 100
+)
+
+
+tabla[
+    "probabilidad_promedio"
+] *= 100
+
+
+tabla[
+    "probabilidad_minima"
+] *= 100
+
+
+tabla[
+    "probabilidad_maxima"
+] *= 100
+
+
+tabla = tabla.rename(
+    columns={
+        "nivel_riesgo": "Nivel",
+        "predicciones": "Predicciones",
+        "lotes": "Lotes",
+        "porcentaje_total": "% del total",
+        "probabilidad_promedio": (
+            "Probabilidad promedio (%)"
+        ),
+        "probabilidad_minima": (
+            "Probabilidad mínima (%)"
+        ),
+        "probabilidad_maxima": (
+            "Probabilidad máxima (%)"
+        )
+    }
+)
+
+
+st.dataframe(
+    tabla,
+    use_container_width=True,
+    hide_index=True
+)
+
+
+# ============================================================
+# 14. REAL VS PREDICHO
+# ============================================================
+
+if (
+    "verificado" in df_filtrado.columns
+    and
+    "target_riesgo_alto_4sem_real"
+    in df_filtrado.columns
+):
+
+    df_real = df_filtrado.copy()
+
+
+    df_real["verificado_bool"] = (
+        df_real["verificado"]
+        .apply(normalizar_bool)
+    )
+
+
+    df_real = df_real[
+        df_real[
+            "verificado_bool"
+        ]
         &
-        df_filtrado[
+        df_real[
             "target_riesgo_alto_4sem_real"
         ].notna()
     ].copy()
 
 
-    if not df_verificado.empty:
+    if not df_real.empty:
 
         st.header(
-            "🔟 Mortalidad real vs riesgo predicho"
+            "1️⃣4️⃣ Riesgo real vs riesgo predicho"
         )
 
-        # ----------------------------------------------------
-        # CONVERTIR TARGET REAL
-        # ----------------------------------------------------
 
-        df_verificado[
-            "target_real"
-        ] = df_verificado[
+        df_real[
+            "real_bool"
+        ] = df_real[
             "target_riesgo_alto_4sem_real"
         ].apply(
-            convertir_booleano
+            normalizar_bool
         )
 
 
-        df_verificado[
-            "target_real_texto"
+        df_real[
+            "real_nivel"
         ] = np.where(
-            df_verificado[
-                "target_real"
+            df_real[
+                "real_bool"
             ],
             "ALTO",
             "BAJO"
         )
 
 
-        # ----------------------------------------------------
-        # MATRIZ DE COMPARACIÓN
-        # ----------------------------------------------------
-
         comparacion = pd.crosstab(
-            df_verificado[
-                "target_real_texto"
+            df_real[
+                "real_nivel"
             ],
-            df_verificado[
+            df_real[
                 "nivel_riesgo"
             ]
         )
 
 
         comparacion = comparacion.reindex(
-            index=["ALTO", "BAJO"],
-            columns=["ALTO", "BAJO"],
+            index=[
+                "ALTO",
+                "BAJO"
+            ],
+            columns=[
+                "ALTO",
+                "BAJO"
+            ],
             fill_value=0
         )
 
 
-        fig_confusion = go.Figure(
+        fig = go.Figure(
             data=go.Heatmap(
                 z=comparacion.values,
                 x=[
@@ -1344,155 +1386,13 @@ if existen_columnas_reales:
         )
 
 
-        fig_confusion.update_layout(
-            title=(
-                "Comparación entre mortalidad "
-                "real y predicción"
-            ),
-            xaxis_title="Predicción del modelo",
-            yaxis_title="Desenlace real"
-        )
-
-
-        st.plotly_chart(
-            fig_confusion,
-            use_container_width=True
-        )
-
-
-        # ----------------------------------------------------
-        # CANTIDAD REAL VS PREDICHA
-        # ----------------------------------------------------
-
-        real_alto = int(
-            df_verificado[
-                "target_real"
-            ].sum()
-        )
-
-
-        predicho_alto = int(
-            df_verificado[
-                "riesgo_alto_predicho"
-            ].sum()
-        )
-
-
-        datos_comparacion = pd.DataFrame({
-            "tipo": [
-                "Mortalidad/riesgo real",
-                "Riesgo predicho"
-            ],
-
-            "cantidad": [
-                real_alto,
-                predicho_alto
-            ]
-        })
-
-
-        fig = px.bar(
-            datos_comparacion,
-            x="tipo",
-            y="cantidad",
-            text="cantidad",
-            title=(
-                "Riesgo real vs riesgo "
-                "clasificado por el modelo"
-            )
-        )
-
-
-        fig.update_layout(
-            xaxis_title="Tipo",
-            yaxis_title="Cantidad"
-        )
-
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-
-        # ----------------------------------------------------
-        # EVOLUCIÓN REAL VS PREDICHA
-        # ----------------------------------------------------
-
-        evolucion_real = (
-            df_verificado
-            .groupby("fecha")
-            .agg(
-                real=(
-                    "target_real",
-                    "mean"
-                ),
-
-                predicho=(
-                    "riesgo_alto_predicho",
-                    "mean"
-                )
-            )
-            .reset_index()
-        )
-
-
-        evolucion_real[
-            "real_pct"
-        ] = (
-            evolucion_real[
-                "real"
-            ] * 100
-        )
-
-
-        evolucion_real[
-            "predicho_pct"
-        ] = (
-            evolucion_real[
-                "predicho"
-            ] * 100
-        )
-
-
-        fig = go.Figure()
-
-
-        fig.add_trace(
-            go.Scatter(
-                x=evolucion_real[
-                    "fecha"
-                ],
-                y=evolucion_real[
-                    "real_pct"
-                ],
-                mode="lines+markers",
-                name="Real"
-            )
-        )
-
-
-        fig.add_trace(
-            go.Scatter(
-                x=evolucion_real[
-                    "fecha"
-                ],
-                y=evolucion_real[
-                    "predicho_pct"
-                ],
-                mode="lines+markers",
-                name="Predicho"
-            )
-        )
-
-
         fig.update_layout(
             title=(
-                "Evolución del riesgo real "
-                "vs riesgo predicho"
+                "Matriz de comparación "
+                "real vs predicha"
             ),
-            xaxis_title="Fecha",
-            yaxis_title="Porcentaje (%)"
+            xaxis_title="Predicción",
+            yaxis_title="Resultado real"
         )
 
 
@@ -1505,183 +1405,24 @@ if existen_columnas_reales:
     else:
 
         st.info(
-            "ℹ️ Todavía no existen suficientes "
-            "predicciones verificadas con desenlace "
-            "real para mostrar la comparación."
+            "Todavía no existen suficientes "
+            "predicciones verificadas para comparar "
+            "mortalidad real y predicha."
         )
 
 
 # ============================================================
-# SECCIÓN 12
-# TABLA DE LOTES
-# ============================================================
-
-st.header(
-    "1️⃣1️⃣ Resumen de riesgo por lote"
-)
-
-
-tabla_lotes = riesgo_lote[
-    [
-        "id_lote",
-        "total_predicciones",
-        "alertas_alto",
-        "porcentaje_alto",
-        "probabilidad_promedio_pct",
-        "probabilidad_maxima_pct"
-    ]
-].copy()
-
-
-tabla_lotes = tabla_lotes.sort_values(
-    "porcentaje_alto",
-    ascending=False
-)
-
-
-tabla_lotes = tabla_lotes.rename(
-    columns={
-        "id_lote": "Lote",
-        "total_predicciones": "Predicciones",
-        "alertas_alto": "Alertas ALTO",
-        "porcentaje_alto": "% ALTO",
-        "probabilidad_promedio_pct": (
-            "Probabilidad promedio (%)"
-        ),
-        "probabilidad_maxima_pct": (
-            "Probabilidad máxima (%)"
-        )
-    }
-)
-
-
-st.dataframe(
-    tabla_lotes,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# SECCIÓN 13
-# PREDICCIONES MÁS CRÍTICAS
-# ============================================================
-
-st.header(
-    "1️⃣2️⃣ Predicciones con mayor probabilidad de riesgo"
-)
-
-
-criticas = (
-    df_filtrado
-    .sort_values(
-        "probabilidad_riesgo_predicha",
-        ascending=False
-    )
-    .head(20)
-    .copy()
-)
-
-
-columnas_criticas = [
-    "id_lote",
-    "fecha",
-    "probabilidad_pct",
-    "nivel_riesgo",
-    "umbral_utilizado",
-    "modelo_utilizado"
-]
-
-
-columnas_criticas = [
-    col
-    for col in columnas_criticas
-    if col in criticas.columns
-]
-
-
-criticas_mostrar = criticas[
-    columnas_criticas
-].copy()
-
-
-criticas_mostrar = criticas_mostrar.rename(
-    columns={
-        "id_lote": "Lote",
-        "fecha": "Fecha",
-        "probabilidad_pct": "Probabilidad (%)",
-        "nivel_riesgo": "Riesgo",
-        "umbral_utilizado": "Umbral",
-        "modelo_utilizado": "Modelo"
-    }
-)
-
-
-st.dataframe(
-    criticas_mostrar,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-# ============================================================
-# SECCIÓN 14
-# INFORMACIÓN DEL MODELO
+# INFORMACIÓN FINAL
 # ============================================================
 
 st.divider()
 
-st.header(
-    "ℹ️ Información de la predicción"
-)
-
-
-col1, col2, col3, col4 = st.columns(4)
-
-
-with col1:
-
-    st.metric(
-        "Horizonte",
-        "4 semanas"
-    )
-
-
-with col2:
-
-    st.metric(
-        "Umbral",
-        f"{umbral:.2f}"
-    )
-
-
-with col3:
-
-    st.metric(
-        "Probabilidad mínima",
-        f"{probabilidad_minima:.1f}%"
-    )
-
-
-with col4:
-
-    st.metric(
-        "Probabilidad máxima",
-        f"{probabilidad_maxima:.1f}%"
-    )
-
 
 st.caption(
-    "La clasificación de riesgo ALTO se obtiene cuando "
-    "la probabilidad estimada por el modelo supera o "
-    "iguala el umbral utilizado en la predicción."
-)
-
-
-# ============================================================
-# FIN
-# ============================================================
-
-st.success(
-    "✅ Dashboard de riesgo de mortalidad cargado correctamente."
+    "El sistema clasifica como riesgo ALTO las observaciones "
+    "cuya probabilidad estimada es mayor o igual al umbral "
+    f"utilizado ({umbral:.2f}). Las categorías ALTO y BAJO "
+    "representan predicciones del modelo; no deben interpretarse "
+    "como mortalidad real hasta que exista un desenlace observado "
+    "y registrado en target_riesgo_alto_4sem_real."
 )
