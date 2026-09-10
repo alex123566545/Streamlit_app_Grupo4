@@ -14,6 +14,15 @@ HORIZONTE_DIAS = 28
 TIMEZONE_PERU = timezone(timedelta(hours=-5))
 HOY = datetime.now(TIMEZONE_PERU).date()
 
+# ------------------------------------------------------------------
+# NUEVO: margen de "zona gris".
+#
+# Si el riesgo predicho es BAJO pero la probabilidad está a menos
+# de este margen del umbral utilizado, se muestra una advertencia:
+# el modelo no marcó alerta, pero estuvo cerca de hacerlo.
+# ------------------------------------------------------------------
+MARGEN_ALERTA_UMBRAL = 0.10
+
 
 @st.cache_data(ttl=30)
 def cargar_predicciones():
@@ -136,6 +145,18 @@ def opcion_intervencion_actual(valor):
     return "Sí" if bool(valor) else "No"
 
 
+def es_zona_gris(riesgo_alto_predicho, probabilidad, umbral, margen=MARGEN_ALERTA_UMBRAL):
+    """
+    Indica si una predicción de riesgo BAJO estuvo peligrosamente
+    cerca del umbral (posible falso negativo "por poco").
+    """
+    if riesgo_alto_predicho is True:
+        return False
+    if pd.isna(probabilidad) or pd.isna(umbral):
+        return False
+    return (umbral - probabilidad) < margen
+
+
 st.title("🐄 SIPREM-BOVINO")
 st.subheader("Verificación y seguimiento de predicciones")
 st.caption(
@@ -163,6 +184,16 @@ df["dias_desde_prediccion"] = df["fecha"].apply(
     lambda f: (HOY - f).days if pd.notna(f) else None
 )
 
+# NUEVO: bandera de zona gris por fila, para la tabla y las métricas.
+df["zona_gris"] = df.apply(
+    lambda f: es_zona_gris(
+        f["riesgo_alto_predicho"],
+        f["probabilidad_riesgo_predicha"],
+        f["umbral_utilizado"],
+    ),
+    axis=1,
+)
+
 total = len(df)
 pendientes = int((~df["verificado"].fillna(False)).sum())
 verificados = int(df["verificado"].fillna(False).sum())
@@ -173,18 +204,28 @@ listas_verificar = int(
     ).sum()
 )
 fechas_futuras = int((df["dias_desde_prediccion"] < 0).sum())
+en_zona_gris = int(df["zona_gris"].sum())
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Total", total)
 c2.metric("Pendientes", pendientes)
 c3.metric("Listas para verificar", listas_verificar)
 c4.metric("Verificadas", verificados)
 c5.metric("Fechas futuras", fechas_futuras)
+c6.metric(
+    "⚠️ En zona gris",
+    en_zona_gris,
+    help=(
+        f"Riesgo BAJO predicho, pero con probabilidad a menos de "
+        f"{MARGEN_ALERTA_UMBRAL:.0%} del umbral utilizado. "
+        "Posibles falsos negativos 'por poco'."
+    ),
+)
 
 st.divider()
 
 st.subheader("🔎 Filtros")
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     lotes = ["Todos"] + sorted(
@@ -210,6 +251,12 @@ with c4:
     )
     filtro_distrito = st.selectbox("Distrito", distritos)
 
+with c5:
+    filtro_zona_gris = st.selectbox(
+        "Zona gris",
+        ["Todas", "Solo zona gris"],
+    )
+
 df_filtrado = df.copy()
 
 if filtro_lote != "Todos":
@@ -232,6 +279,9 @@ if filtro_distrito != "Todos":
         df_filtrado["distrito"].astype(str) == filtro_distrito
     ]
 
+if filtro_zona_gris == "Solo zona gris":
+    df_filtrado = df_filtrado[df_filtrado["zona_gris"]]
+
 st.subheader("📋 Predicciones")
 
 if df_filtrado.empty:
@@ -244,7 +294,9 @@ tabla = df_filtrado[
         "fecha",
         "distrito",
         "probabilidad_riesgo_predicha",
+        "umbral_utilizado",
         "riesgo_texto",
+        "zona_gris",
         "intervencion_realizada",
         "estado_texto",
     ]
@@ -256,7 +308,9 @@ tabla.rename(
         "fecha": "Fecha",
         "distrito": "Distrito",
         "probabilidad_riesgo_predicha": "Probabilidad",
+        "umbral_utilizado": "Umbral",
         "riesgo_texto": "Riesgo",
+        "zona_gris": "Zona gris",
         "intervencion_realizada": "Intervención",
         "estado_texto": "Verificación",
     },
@@ -266,6 +320,12 @@ tabla.rename(
 tabla["Probabilidad"] = (
     tabla["Probabilidad"].astype(float) * 100
 ).round(2).astype(str) + "%"
+
+tabla["Umbral"] = (
+    tabla["Umbral"].astype(float) * 100
+).round(1).astype(str) + "%"
+
+tabla["Zona gris"] = tabla["Zona gris"].map({True: "⚠️ Sí", False: "—"})
 
 tabla["Intervención"] = (
     tabla["Intervención"]
@@ -285,11 +345,12 @@ st.subheader("🩺 Verificar / actualizar una predicción")
 opciones = []
 for _, fila in df_filtrado.iterrows():
     prob = float(fila["probabilidad_riesgo_predicha"])
+    marca_zona_gris = " ⚠️" if fila["zona_gris"] else ""
     opciones.append(
         (
             f"{fila['id_lote']} | {fila['fecha']} | "
             f"{fila['riesgo_texto']} | {prob:.2%} | "
-            f"{fila['estado_texto']}",
+            f"{fila['estado_texto']}{marca_zona_gris}",
             fila["id_lote"],
             fila["fecha"],
             fila["modelo_utilizado"],
@@ -319,6 +380,26 @@ c3.write("**Riesgo predicho**")
 c3.write("🔴 ALTO" if bool(fila["riesgo_alto_predicho"]) else "🟢 BAJO")
 c4.write("**Probabilidad**")
 c4.write(f"{float(fila['probabilidad_riesgo_predicha']):.2%}")
+
+# ------------------------------------------------------------------
+# NUEVO: advertencia de zona gris para la predicción seleccionada.
+#
+# Aunque el modelo haya dicho "riesgo BAJO", si la probabilidad
+# estuvo muy cerca del umbral, se avisa que podría valer la pena
+# un seguimiento preventivo aunque no haya alerta formal.
+# ------------------------------------------------------------------
+if bool(fila["zona_gris"]):
+    margen = float(fila["umbral_utilizado"]) - float(
+        fila["probabilidad_riesgo_predicha"]
+    )
+    st.warning(
+        f"⚠️ Riesgo BAJO predicho, pero la probabilidad "
+        f"({float(fila['probabilidad_riesgo_predicha']):.1%}) está muy "
+        f"cerca del umbral ({float(fila['umbral_utilizado']):.1%}), "
+        f"con un margen de solo {margen:.1%}. "
+        "Podría valer la pena un seguimiento preventivo aunque el "
+        "modelo no haya generado una alerta formal."
+    )
 
 dias_transcurridos = (HOY - fecha_prediccion).days
 fecha_verificable = fecha_prediccion + timedelta(days=HORIZONTE_DIAS)
