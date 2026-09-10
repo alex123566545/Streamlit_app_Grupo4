@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from src.config.database import get_connection
+from utils.database import get_connection
 
 st.set_page_config(
     page_title="SIPREM-BOVINO | Verificación",
