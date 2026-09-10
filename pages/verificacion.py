@@ -321,7 +321,6 @@ c3.write("🔴 ALTO" if bool(fila["riesgo_alto_predicho"]) else "🟢 BAJO")
 c4.write("**Probabilidad**")
 c4.write(f"{float(fila['probabilidad_riesgo_predicha']):.2%}")
 
-dias_transcurridos = (HOY - fecha_prediccion).days
 fecha_verificable = (
     fecha_prediccion
     + timedelta(days=HORIZONTE_DIAS)
