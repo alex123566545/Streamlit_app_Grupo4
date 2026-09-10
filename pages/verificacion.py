@@ -1,51 +1,25 @@
-from utils.database import get_connection
-
-# ============================================================
-# SIPREM-BOVINO
-# VERIFICACIÓN DE PREDICCIONES
-# ============================================================
-
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
-
-
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
+from src.config.database import get_connection
 
 st.set_page_config(
     page_title="SIPREM-BOVINO | Verificación",
     page_icon="🐄",
-    layout="wide"
+    layout="wide",
 )
 
+HORIZONTE_DIAS = 28
+TIMEZONE_PERU = ZoneInfo("America/Lima")
+HOY = datetime.now(TIMEZONE_PERU).date()
 
-# ============================================================
-# ESTILOS
-# ============================================================
-
-st.title("🐄 SIPREM-BOVINO")
-st.subheader("Verificación y seguimiento de predicciones")
-
-st.caption(
-    "Registre intervenciones y confirme el resultado real "
-    "de las predicciones después del periodo de 4 semanas."
-)
-
-
-# ============================================================
-# CONEXIÓN / CONSULTA
-# ============================================================
 
 @st.cache_data(ttl=30)
 def cargar_predicciones():
-
     conn = get_connection()
-
     try:
-
         query = """
             SELECT
                 id_lote,
@@ -53,59 +27,45 @@ def cargar_predicciones():
                 distrito,
                 categoria_zootecnica,
                 raza_predominante,
-
                 modelo_utilizado,
                 umbral_utilizado,
                 probabilidad_riesgo_predicha,
                 riesgo_alto_predicho,
-
                 intervencion_realizada,
                 tipo_intervencion,
                 fecha_intervencion,
                 resultado_intervencion,
-
                 verificado,
                 target_riesgo_alto_4sem_real,
                 fecha_verificacion,
-
                 predicho_en
-
             FROM gold_ml.predicciones
-
-            ORDER BY fecha DESC, id_lote;
+            ORDER BY fecha DESC, id_lote ASC;
         """
-
-        df = pd.read_sql(query, conn)
-
-        return df
-
+        return pd.read_sql(query, conn)
     finally:
         conn.close()
 
 
-# ============================================================
-# ACTUALIZAR PREDICCIÓN
-# ============================================================
-
 def actualizar_prediccion(
     id_lote,
-    fecha,
+    fecha_prediccion,
     modelo_utilizado,
     intervencion_realizada,
     tipo_intervencion,
     fecha_intervencion,
     resultado_intervencion,
     verificado,
-    target_real
+    target_real,
 ):
-
+    """
+    Actualiza solo los campos de seguimiento.
+    No modifica las features ni la salida original del modelo.
+    """
     conn = get_connection()
-
     try:
-
         query = """
             UPDATE gold_ml.predicciones
-
             SET
                 intervencion_realizada = %s,
                 tipo_intervencion = %s,
@@ -116,279 +76,182 @@ def actualizar_prediccion(
                 fecha_verificacion =
                     CASE
                         WHEN %s = TRUE
-                        THEN NOW()
+                        THEN COALESCE(fecha_verificacion, NOW())
                         ELSE fecha_verificacion
                     END
-
             WHERE
                 id_lote = %s
                 AND fecha = %s
                 AND modelo_utilizado = %s;
         """
 
+        valores = (
+            intervencion_realizada,
+            tipo_intervencion,
+            fecha_intervencion,
+            resultado_intervencion,
+            verificado,
+            target_real,
+            verificado,
+            id_lote,
+            fecha_prediccion,
+            modelo_utilizado,
+        )
+
         with conn.cursor() as cur:
-
-            cur.execute(
-                query,
-                (
-                    intervencion_realizada,
-                    tipo_intervencion,
-                    fecha_intervencion,
-                    resultado_intervencion,
-                    verificado,
-                    target_real,
-                    verificado,
-
-                    id_lote,
-                    fecha,
-                    modelo_utilizado
+            cur.execute(query, valores)
+            if cur.rowcount != 1:
+                raise ValueError(
+                    "No se encontró exactamente una predicción para actualizar."
                 )
-            )
 
         conn.commit()
-
     except Exception:
-
         conn.rollback()
         raise
-
     finally:
         conn.close()
 
 
-# ============================================================
-# CARGAR DATOS
-# ============================================================
+def texto_riesgo(valor):
+    if valor is True:
+        return "ALTO"
+    if valor is False:
+        return "BAJO"
+    return "DESCONOCIDO"
+
+
+def fecha_a_date(valor):
+    if valor is None or pd.isna(valor):
+        return None
+    if hasattr(valor, "date"):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    return None
+
+
+def opcion_intervencion_actual(valor):
+    if pd.isna(valor):
+        return "No registrado todavía"
+    return "Sí" if bool(valor) else "No"
+
+
+st.title("🐄 SIPREM-BOVINO")
+st.subheader("Verificación y seguimiento de predicciones")
+st.caption(
+    "Registre la intervención y, cuando hayan transcurrido 4 semanas "
+    "desde la predicción, confirme el resultado real."
+)
 
 try:
-
     df = cargar_predicciones()
-
 except Exception as e:
-
-    st.error(
-        "❌ No se pudo conectar o leer gold_ml.predicciones."
-    )
-
+    st.error("❌ No se pudo leer gold_ml.predicciones.")
     st.exception(e)
-
     st.stop()
-
 
 if df.empty:
-
-    st.warning(
-        "No existen predicciones registradas."
-    )
-
+    st.info("No existen predicciones registradas.")
     st.stop()
 
-
-# ============================================================
-# PREPARAR DATOS
-# ============================================================
-
-df["fecha"] = pd.to_datetime(
-    df["fecha"]
-).dt.date
-
-df["riesgo_texto"] = df[
-    "riesgo_alto_predicho"
-].map(
-    {
-        True: "ALTO",
-        False: "BAJO"
-    }
+df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+df["riesgo_texto"] = df["riesgo_alto_predicho"].apply(texto_riesgo)
+df["estado_texto"] = df["verificado"].fillna(False).apply(
+    lambda x: "VERIFICADO" if bool(x) else "PENDIENTE"
 )
-
-df["estado_verificacion"] = df[
-    "verificado"
-].map(
-    {
-        True: "VERIFICADO",
-        False: "PENDIENTE"
-    }
+df["dias_desde_prediccion"] = df["fecha"].apply(
+    lambda f: (HOY - f).days if pd.notna(f) else None
 )
-
-
-# ============================================================
-# RESUMEN
-# ============================================================
 
 total = len(df)
-
-pendientes = int(
-    (~df["verificado"]).sum()
-)
-
-verificados = int(
-    df["verificado"].sum()
-)
-
-hoy = date.today()
-
-fecha_limite = hoy - timedelta(days=28)
-
+pendientes = int((~df["verificado"].fillna(False)).sum())
+verificados = int(df["verificado"].fillna(False).sum())
 listas_verificar = int(
     (
-        (~df["verificado"])
-        &
-        (df["fecha"] <= fecha_limite)
+        (~df["verificado"].fillna(False))
+        & (df["dias_desde_prediccion"] >= HORIZONTE_DIAS)
     ).sum()
 )
+fechas_futuras = int((df["dias_desde_prediccion"] < 0).sum())
 
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric(
-        "Total predicciones",
-        total
-    )
-
-with col2:
-    st.metric(
-        "Pendientes",
-        pendientes
-    )
-
-with col3:
-    st.metric(
-        "Listas para verificar",
-        listas_verificar
-    )
-
-with col4:
-    st.metric(
-        "Verificadas",
-        verificados
-    )
-
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Total", total)
+c2.metric("Pendientes", pendientes)
+c3.metric("Listas para verificar", listas_verificar)
+c4.metric("Verificadas", verificados)
+c5.metric("Fechas futuras", fechas_futuras)
 
 st.divider()
 
-
-# ============================================================
-# FILTROS
-# ============================================================
-
 st.subheader("🔎 Filtros")
+c1, c2, c3, c4 = st.columns(4)
 
-col1, col2, col3, col4 = st.columns(4)
-
-
-with col1:
-
-    lotes = [
-        "Todos"
-    ] + sorted(
-        df["id_lote"].dropna().unique().tolist()
+with c1:
+    lotes = ["Todos"] + sorted(
+        df["id_lote"].dropna().astype(str).unique().tolist()
     )
+    filtro_lote = st.selectbox("Lote", lotes)
 
-    filtro_lote = st.selectbox(
-        "Lote",
-        lotes
-    )
-
-
-with col2:
-
-    riesgos = [
-        "Todos",
-        "ALTO",
-        "BAJO"
-    ]
-
+with c2:
     filtro_riesgo = st.selectbox(
-        "Riesgo",
-        riesgos
+        "Riesgo predicho",
+        ["Todos", "ALTO", "BAJO"],
     )
 
-
-with col3:
-
-    estados = [
-        "Todos",
-        "PENDIENTE",
-        "VERIFICADO"
-    ]
-
+with c3:
     filtro_estado = st.selectbox(
         "Estado",
-        estados
+        ["Todos", "PENDIENTE", "VERIFICADO"],
     )
 
-
-with col4:
-
-    distritos = [
-        "Todos"
-    ] + sorted(
-        df["distrito"].dropna().unique().tolist()
+with c4:
+    distritos = ["Todos"] + sorted(
+        df["distrito"].dropna().astype(str).unique().tolist()
     )
-
-    filtro_distrito = st.selectbox(
-        "Distrito",
-        distritos
-    )
-
-
-# ============================================================
-# APLICAR FILTROS
-# ============================================================
+    filtro_distrito = st.selectbox("Distrito", distritos)
 
 df_filtrado = df.copy()
 
-
 if filtro_lote != "Todos":
-
     df_filtrado = df_filtrado[
-        df_filtrado["id_lote"] == filtro_lote
+        df_filtrado["id_lote"].astype(str) == filtro_lote
     ]
 
-
 if filtro_riesgo != "Todos":
-
     df_filtrado = df_filtrado[
         df_filtrado["riesgo_texto"] == filtro_riesgo
     ]
 
-
 if filtro_estado != "Todos":
-
     df_filtrado = df_filtrado[
-        df_filtrado["estado_verificacion"] == filtro_estado
+        df_filtrado["estado_texto"] == filtro_estado
     ]
-
 
 if filtro_distrito != "Todos":
-
     df_filtrado = df_filtrado[
-        df_filtrado["distrito"] == filtro_distrito
+        df_filtrado["distrito"].astype(str) == filtro_distrito
     ]
 
+st.subheader("📋 Predicciones")
 
-# ============================================================
-# TABLA DE PREDICCIONES
-# ============================================================
-
-st.subheader("📋 Predicciones registradas")
-
-columnas_mostrar = [
-    "id_lote",
-    "fecha",
-    "distrito",
-    "probabilidad_riesgo_predicha",
-    "riesgo_texto",
-    "intervencion_realizada",
-    "verificado"
-]
+if df_filtrado.empty:
+    st.info("No hay registros con los filtros seleccionados.")
+    st.stop()
 
 tabla = df_filtrado[
-    columnas_mostrar
+    [
+        "id_lote",
+        "fecha",
+        "distrito",
+        "probabilidad_riesgo_predicha",
+        "riesgo_texto",
+        "intervencion_realizada",
+        "estado_texto",
+    ]
 ].copy()
 
-tabla = tabla.rename(
+tabla.rename(
     columns={
         "id_lote": "Lote",
         "fecha": "Fecha",
@@ -396,384 +259,375 @@ tabla = tabla.rename(
         "probabilidad_riesgo_predicha": "Probabilidad",
         "riesgo_texto": "Riesgo",
         "intervencion_realizada": "Intervención",
-        "verificado": "Verificado"
-    }
+        "estado_texto": "Verificación",
+    },
+    inplace=True,
 )
 
 tabla["Probabilidad"] = (
-    tabla["Probabilidad"] * 100
-).round(2)
+    tabla["Probabilidad"].astype(float) * 100
+).round(2).astype(str) + "%"
 
+tabla["Intervención"] = (
+    tabla["Intervención"]
+    .map({True: "Sí", False: "No"})
+    .fillna("No registrada")
+)
 
 st.dataframe(
     tabla,
     use_container_width=True,
-    hide_index=True
+    hide_index=True,
 )
 
-
-# ============================================================
-# SELECCIÓN DE PREDICCIÓN
-# ============================================================
-
-if df_filtrado.empty:
-
-    st.info(
-        "No existen registros con los filtros seleccionados."
-    )
-
-    st.stop()
-
-
 st.divider()
-
-st.subheader("🩺 Verificar una predicción")
-
-
-# ============================================================
-# OPCIONES DE SELECCIÓN
-# ============================================================
+st.subheader("🩺 Verificar / actualizar una predicción")
 
 opciones = []
-
 for _, fila in df_filtrado.iterrows():
-
-    etiqueta = (
-        f"{fila['id_lote']} | "
-        f"{fila['fecha']} | "
-        f"{fila['riesgo_texto']} | "
-        f"{fila['probabilidad_riesgo_predicha']:.2%}"
-    )
-
+    prob = float(fila["probabilidad_riesgo_predicha"])
     opciones.append(
         (
-            etiqueta,
+            f"{fila['id_lote']} | {fila['fecha']} | "
+            f"{fila['riesgo_texto']} | {prob:.2%} | "
+            f"{fila['estado_texto']}",
             fila["id_lote"],
             fila["fecha"],
-            fila["modelo_utilizado"]
+            fila["modelo_utilizado"],
         )
     )
 
-
-opcion_seleccionada = st.selectbox(
+seleccion = st.selectbox(
     "Seleccione la predicción",
     opciones,
-    format_func=lambda x: x[0]
+    format_func=lambda x: x[0],
 )
 
-
-_, id_lote, fecha_prediccion, modelo = (
-    opcion_seleccionada
-)
-
+_, id_lote, fecha_prediccion, modelo = seleccion
 
 fila = df_filtrado[
     (df_filtrado["id_lote"] == id_lote)
-    &
-    (df_filtrado["fecha"] == fecha_prediccion)
-    &
-    (df_filtrado["modelo_utilizado"] == modelo)
+    & (df_filtrado["fecha"] == fecha_prediccion)
+    & (df_filtrado["modelo_utilizado"] == modelo)
 ].iloc[0]
 
-
-# ============================================================
-# INFORMACIÓN DE LA PREDICCIÓN
-# ============================================================
-
 c1, c2, c3, c4 = st.columns(4)
+c1.write("**Lote**")
+c1.write(str(id_lote))
+c2.write("**Fecha**")
+c2.write(str(fecha_prediccion))
+c3.write("**Riesgo predicho**")
+c3.write("🔴 ALTO" if bool(fila["riesgo_alto_predicho"]) else "🟢 BAJO")
+c4.write("**Probabilidad**")
+c4.write(f"{float(fila['probabilidad_riesgo_predicha']):.2%}")
+
+dias_transcurridos = (HOY - fecha_prediccion).days
+fecha_verificable = fecha_prediccion + pd.Timedelta(days=HORIZONTE_DIAS)
+fecha_verificable = fecha_verificable.date()
+
+if dias_transcurridos < 0:
+    st.warning(
+        f"🕐 Esta predicción es futura ({fecha_prediccion}). "
+        f"No puede verificarse todavía. "
+        f"Podrá verificarse desde aproximadamente {fecha_verificable}."
+    )
+    puede_verificar = False
+elif dias_transcurridos < HORIZONTE_DIAS:
+    faltan = HORIZONTE_DIAS - dias_transcurridos
+    st.warning(
+        f"⏳ Han transcurrido {dias_transcurridos} días. "
+        f"Faltan {faltan} días para completar las 4 semanas. "
+        f"Fecha de verificación: {fecha_verificable}."
+    )
+    puede_verificar = False
+else:
+    st.success(
+        f"✅ Han transcurrido {dias_transcurridos} días. "
+        "El registro ya puede verificarse."
+    )
+    puede_verificar = True
+
+intervencion_actual = fila["intervencion_realizada"]
+verificado_actual = bool(fila["verificado"])
+
+st.markdown("### Estado actual")
+c1, c2, c3 = st.columns(3)
 
 with c1:
-    st.write("**Lote**")
-    st.write(id_lote)
+    if pd.isna(intervencion_actual):
+        st.info("Intervención: no registrada")
+    elif bool(intervencion_actual):
+        st.success("Intervención: sí")
+    else:
+        st.write("Intervención: no")
 
 with c2:
-    st.write("**Fecha**")
-    st.write(fecha_prediccion)
+    st.success("Resultado: verificado") if verificado_actual else st.info(
+        "Resultado: pendiente"
+    )
 
 with c3:
-    st.write("**Riesgo predicho**")
-    st.write(
-        "🔴 ALTO"
-        if fila["riesgo_alto_predicho"]
-        else "🟢 BAJO"
-    )
-
-with c4:
-    st.write("**Probabilidad**")
-    st.write(
-        f"{fila['probabilidad_riesgo_predicha']:.2%}"
-    )
-
+    target_actual = fila["target_riesgo_alto_4sem_real"]
+    if pd.isna(target_actual):
+        st.info("Resultado real: pendiente")
+    elif bool(target_actual):
+        st.error("Resultado real: RIESGO ALTO")
+    else:
+        st.success("Resultado real: NO RIESGO ALTO")
 
 st.divider()
 
-
-# ============================================================
-# FORMULARIO
-# ============================================================
-
 with st.form("form_verificacion"):
 
-    st.subheader(
-        "1️⃣ Registro de intervención"
-    )
+    st.markdown("## 1️⃣ Registro de intervención")
 
-    intervencion = st.selectbox(
+    opciones_intervencion = [
+        "No registrado todavía",
+        "Sí",
+        "No",
+    ]
+
+    opcion_actual = opcion_intervencion_actual(intervencion_actual)
+
+    opcion_intervencion = st.selectbox(
         "¿Se realizó una intervención?",
-        [
-            "No registrar todavía",
-            "Sí",
-            "No"
-        ],
-        index=0
+        opciones_intervencion,
+        index=opciones_intervencion.index(opcion_actual),
     )
 
+    tipo_actual = (
+        "" if pd.isna(fila["tipo_intervencion"])
+        else str(fila["tipo_intervencion"])
+    )
 
-    tipo_intervencion = st.text_input(
-        "Tipo de intervención",
-        value=(
-            fila["tipo_intervencion"]
-            if pd.notna(fila["tipo_intervencion"])
-            else ""
-        ),
-        placeholder=(
-            "Ej.: tratamiento veterinario, "
-            "ajuste alimentario..."
+    resultado_actual = (
+        "" if pd.isna(fila["resultado_intervencion"])
+        else str(fila["resultado_intervencion"])
+    )
+
+    fecha_intervencion_actual = fecha_a_date(
+        fila["fecha_intervencion"]
+    )
+
+    if opcion_intervencion == "Sí":
+        tipo_intervencion = st.text_input(
+            "Tipo de intervención",
+            value=tipo_actual,
+            placeholder=(
+                "Ej.: tratamiento veterinario, ajuste alimentario, "
+                "aislamiento..."
+            ),
         )
-    )
 
-
-    fecha_intervencion = st.date_input(
-        "Fecha de intervención",
-        value=(
-            fila["fecha_intervencion"].date()
-            if pd.notna(fila["fecha_intervencion"])
-            else hoy
+        fecha_intervencion = st.date_input(
+            "Fecha de intervención",
+            value=(
+                fecha_intervencion_actual
+                if fecha_intervencion_actual is not None
+                else HOY
+            ),
         )
-    )
 
-
-    resultado_intervencion = st.text_area(
-        "Resultado de la intervención",
-        value=(
-            fila["resultado_intervencion"]
-            if pd.notna(fila["resultado_intervencion"])
-            else ""
-        ),
-        placeholder=(
-            "Ej.: mejora del estado general..."
+        resultado_intervencion = st.text_area(
+            "Resultado de la intervención",
+            value=resultado_actual,
+            placeholder=(
+                "Ej.: mejora del estado general, respuesta parcial..."
+            ),
         )
-    )
-
+    else:
+        tipo_intervencion = ""
+        fecha_intervencion = None
+        resultado_intervencion = ""
 
     st.divider()
+    st.markdown("## 2️⃣ Verificación del resultado a 4 semanas")
 
+    if verificado_actual:
+        st.success("✅ Esta predicción ya fue verificada.")
 
-    st.subheader(
-        "2️⃣ Verificación del resultado a 4 semanas"
-    )
-
-
-    dias_transcurridos = (
-        hoy - fecha_prediccion
-    ).days
-
-
-    puede_verificar = (
-        dias_transcurridos >= 28
-    )
-
-
-    if puede_verificar:
-
-        st.success(
-            f"Han transcurrido {dias_transcurridos} días. "
-            "El registro puede ser verificado."
+        target_actual_bool = (
+            None
+            if pd.isna(fila["target_riesgo_alto_4sem_real"])
+            else bool(fila["target_riesgo_alto_4sem_real"])
         )
 
-        verificar = st.checkbox(
+        resultado_default = (
+            "Riesgo alto"
+            if target_actual_bool is True
+            else "No hubo riesgo alto"
+        )
+
+        resultado_verificacion = st.radio(
+            "Resultado real registrado",
+            ["Riesgo alto", "No hubo riesgo alto"],
+            index=["Riesgo alto", "No hubo riesgo alto"].index(
+                resultado_default
+            ),
+            horizontal=True,
+        )
+
+        confirmar_verificacion = st.checkbox(
+            "Mantener la verificación confirmada",
+            value=True,
+        )
+
+    elif puede_verificar:
+        st.success("✅ Ya se cumplieron las 4 semanas.")
+
+        confirmar_verificacion = st.checkbox(
             "Confirmar que ya se verificó el resultado real"
         )
 
-        resultado_real = st.radio(
+        resultado_verificacion = st.radio(
             "Resultado real después de las 4 semanas",
-            [
-                "Riesgo alto",
-                "No hubo riesgo alto"
-            ],
-            horizontal=True
+            ["Riesgo alto", "No hubo riesgo alto"],
+            horizontal=True,
         )
 
     else:
-
-        st.warning(
-            f"Han transcurrido {dias_transcurridos} días. "
-            "Todavía no han pasado las 4 semanas."
+        confirmar_verificacion = False
+        resultado_verificacion = None
+        st.info(
+            f"La verificación se habilitará cuando se cumplan "
+            f"{HORIZONTE_DIAS} días desde la fecha de predicción."
         )
 
-        verificar = False
-        resultado_real = None
-
+    st.divider()
 
     guardar = st.form_submit_button(
-        "💾 Guardar información",
-        use_container_width=True
+        "💾 Guardar cambios",
+        use_container_width=True,
     )
-
-
-# ============================================================
-# GUARDAR
-# ============================================================
 
 if guardar:
 
-    # --------------------------------------------------------
-    # INTERVENCIÓN
-    # --------------------------------------------------------
+    # -----------------------------
+    # Intervención
+    # -----------------------------
+    if opcion_intervencion == "Sí":
+        intervencion_db = True
 
-    if intervencion == "Sí":
+        if not tipo_intervencion.strip():
+            st.error("❌ Indique el tipo de intervención.")
+            st.stop()
 
-        intervencion_realizada = True
-
-    elif intervencion == "No":
-
-        intervencion_realizada = False
-
-    else:
-
-        # NULL = todavía desconocido
-        intervencion_realizada = None
-
-
-    # --------------------------------------------------------
-    # CAMPOS DE INTERVENCIÓN
-    # --------------------------------------------------------
-
-    if intervencion_realizada is True:
-
-        tipo_db = (
-            tipo_intervencion.strip()
-            if tipo_intervencion.strip()
-            else None
-        )
-
+        tipo_db = tipo_intervencion.strip()
         fecha_db = fecha_intervencion
-
         resultado_db = (
             resultado_intervencion.strip()
             if resultado_intervencion.strip()
             else None
         )
 
-    elif intervencion_realizada is False:
-
+    elif opcion_intervencion == "No":
+        intervencion_db = False
         tipo_db = None
         fecha_db = None
         resultado_db = None
 
     else:
+        # NULL = todavía no se conoce la intervención.
+        intervencion_db = None
+        tipo_db = (
+            None
+            if pd.isna(fila["tipo_intervencion"])
+            else fila["tipo_intervencion"]
+        )
+        fecha_db = (
+            None
+            if pd.isna(fila["fecha_intervencion"])
+            else fila["fecha_intervencion"]
+        )
+        resultado_db = (
+            None
+            if pd.isna(fila["resultado_intervencion"])
+            else fila["resultado_intervencion"]
+        )
 
-        # Todavía no sabemos
-        tipo_db = fila["tipo_intervencion"]
-        fecha_db = fila["fecha_intervencion"]
-        resultado_db = fila["resultado_intervencion"]
+    # -----------------------------
+    # Validar fecha intervención
+    # -----------------------------
+    if fecha_db is not None:
+        fecha_db_date = fecha_a_date(fecha_db)
 
+        if fecha_db_date is not None:
+            if fecha_db_date > HOY:
+                st.error(
+                    "❌ La fecha de intervención no puede ser futura."
+                )
+                st.stop()
 
-    # --------------------------------------------------------
-    # RESULTADO REAL
-    # --------------------------------------------------------
+            if fecha_db_date < fecha_prediccion:
+                st.error(
+                    "❌ La fecha de intervención no puede ser anterior "
+                    "a la fecha de predicción."
+                )
+                st.stop()
 
-    if verificar:
+    # -----------------------------
+    # Verificación
+    # -----------------------------
+    if verificado_actual:
+        verificado_db = True
 
-        if resultado_real == "Riesgo alto":
+        target_db = (
+            True
+            if resultado_verificacion == "Riesgo alto"
+            else False
+        )
 
-            target_real = True
-
-        else:
-
-            target_real = False
+    elif confirmar_verificacion:
+        if not puede_verificar:
+            st.error(
+                "❌ Todavía no han transcurrido las 4 semanas. "
+                "No se puede verificar."
+            )
+            st.stop()
 
         verificado_db = True
 
+        target_db = (
+            True
+            if resultado_verificacion == "Riesgo alto"
+            else False
+        )
+
     else:
+        verificado_db = False
 
-        # Todavía no se ha confirmado
-        target_real = fila[
-            "target_riesgo_alto_4sem_real"
-        ]
-
-        verificado_db = bool(
-            fila["verificado"]
-        )
-
-
-    # --------------------------------------------------------
-    # VALIDACIÓN
-    # --------------------------------------------------------
-
-    if verificar and not puede_verificar:
-
-        st.error(
-            "❌ Todavía no han transcurrido "
-            "4 semanas."
-        )
-
-        st.stop()
-
-
-    if verificar:
-
-        if resultado_real is None:
-
-            st.error(
-                "❌ Debe seleccionar el resultado real."
-            )
-
-            st.stop()
-
-
-    # --------------------------------------------------------
-    # ACTUALIZAR
-    # --------------------------------------------------------
+        # Mientras no se confirme el desenlace real,
+        # el target permanece NULL.
+        target_db = None
 
     try:
-
         actualizar_prediccion(
             id_lote=id_lote,
-            fecha=fecha_prediccion,
+            fecha_prediccion=fecha_prediccion,
             modelo_utilizado=modelo,
-
-            intervencion_realizada=
-                intervencion_realizada,
-
-            tipo_intervencion=
-                tipo_db,
-
-            fecha_intervencion=
-                fecha_db,
-
-            resultado_intervencion=
-                resultado_db,
-
-            verificado=
-                verificado_db,
-
-            target_real=
-                target_real
+            intervencion_realizada=intervencion_db,
+            tipo_intervencion=tipo_db,
+            fecha_intervencion=fecha_db,
+            resultado_intervencion=resultado_db,
+            verificado=verificado_db,
+            target_real=target_db,
         )
 
-        st.success(
-            "✅ Información guardada correctamente."
-        )
+        if verificado_db:
+            st.success(
+                "✅ Predicción verificada. "
+                "El registro ya cumple las condiciones para aparecer "
+                "en la vista de verificadas."
+            )
+        else:
+            st.success(
+                "✅ Seguimiento guardado. "
+                "La predicción continúa pendiente de verificación."
+            )
 
         st.cache_data.clear()
-
         st.rerun()
 
     except Exception as e:
-
-        st.error(
-            "❌ No se pudo actualizar la predicción."
-        )
-
+        st.error("❌ No se pudo actualizar la predicción.")
         st.exception(e)
