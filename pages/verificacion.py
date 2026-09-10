@@ -9,7 +9,6 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 
-from src.config.database import get_connection
 
 
 # ============================================================
