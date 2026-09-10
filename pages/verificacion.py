@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date, datetime, timedelta, timezone
 
-from src.config.database import get_connection
+from utils.database import get_connection
 
 st.set_page_config(
     page_title="SIPREM-BOVINO | Verificación",
