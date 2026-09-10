@@ -1,17 +1,27 @@
 import psycopg2
 import os
-import sys
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
 def get_connection():
     return psycopg2.connect(
-        host="aws-0-us-west-2.pooler.supabase.com",
-        port=5432,
-        database="postgres",
-        user="postgres.cuxppijddpiuaxwyswfb",
-        password="alex20151615665451",
-        sslmode="require"
+        host=os.environ["SUPABASE_DB_HOST"],
+        port=os.environ.get("SUPABASE_DB_PORT", "5432"),
+        database=os.environ.get("SUPABASE_DB_NAME", "postgres"),
+        user=os.environ["SUPABASE_DB_USER"],
+        password=os.environ["SUPABASE_DB_PASSWORD"],
+        sslmode="require",
     )
+
+
+# ------------------------------------------------------------------
+# Credenciales para la API de Storage (distintas a las de Postgres).
+# Se exponen aquí para que otras páginas de la app (como
+# nueva_prediccion.py) las reutilicen sin duplicar la lectura del
+# .env en cada archivo.
+# ------------------------------------------------------------------
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
