@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
-from utils.database import get_connection
+from src.config.database import get_connection
 
 st.set_page_config(
     page_title="SIPREM-BOVINO | Verificación",
@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 HORIZONTE_DIAS = 28
-TIMEZONE_PERU = ZoneInfo("America/Lima")
+TIMEZONE_PERU = timezone(timedelta(hours=-5))
 HOY = datetime.now(TIMEZONE_PERU).date()
 
 
@@ -321,10 +321,8 @@ c4.write("**Probabilidad**")
 c4.write(f"{float(fila['probabilidad_riesgo_predicha']):.2%}")
 
 dias_transcurridos = (HOY - fecha_prediccion).days
-fecha_verificable = (
-    fecha_prediccion
-    + timedelta(days=HORIZONTE_DIAS)
-)
+fecha_verificable = fecha_prediccion + pd.Timedelta(days=HORIZONTE_DIAS)
+fecha_verificable = fecha_verificable.date()
 
 if dias_transcurridos < 0:
     st.warning(
