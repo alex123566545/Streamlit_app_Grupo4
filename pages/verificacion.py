@@ -1,4 +1,4 @@
-from src.config.database import get_connection
+from utils.database import get_connection
 
 # ============================================================
 # SIPREM-BOVINO
