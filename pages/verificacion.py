@@ -322,8 +322,10 @@ c4.write("**Probabilidad**")
 c4.write(f"{float(fila['probabilidad_riesgo_predicha']):.2%}")
 
 dias_transcurridos = (HOY - fecha_prediccion).days
-fecha_verificable = fecha_prediccion + pd.Timedelta(days=HORIZONTE_DIAS)
-fecha_verificable = fecha_verificable.date()
+fecha_verificable = (
+    fecha_prediccion
+    + timedelta(days=HORIZONTE_DIAS)
+)
 
 if dias_transcurridos < 0:
     st.warning(
