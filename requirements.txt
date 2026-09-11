@@ -6,3 +6,4 @@ scikit-learn
 psycopg2-binary
 plotly
 python-dotenv
+supabase
