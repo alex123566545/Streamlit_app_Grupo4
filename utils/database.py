@@ -7,7 +7,7 @@ def get_connection():
         host="aws-1-us-east-2.pooler.supabase.com",
         port=5432,
         database="postgres",
-        user="postgres.klbmaoqxfvjsczwrrwkj",
+        user="postgres.cuxppijddpiuaxwyswfb",
         password="alex20151615665451",
         sslmode="require"
     )
@@ -18,5 +18,5 @@ def get_connection():
 # Reemplaza SUPABASE_KEY por tu key real de este proyecto
 # (Project Settings > API Keys en el dashboard de Supabase).
 # ------------------------------------------------------------------
-SUPABASE_URL = "https://klbmaoqxfvjsczwrrwkj.supabase.co"
+SUPABASE_URL = "https://cuxppijddpiuaxwyswfb.supabase.co"
 SUPABASE_KEY = "sb_publishable_y1wP5ZIz5elf33-CJkYmvw_gYI6dAyA"
