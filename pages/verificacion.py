@@ -164,6 +164,14 @@ st.caption(
     "desde la predicción, confirme el resultado real."
 )
 
+# ------------------------------------------------------------------
+# NUEVO: bandera para bloquear el botón "Guardar cambios" mientras
+# se procesa un guardado, evitando que un doble clic (o un reintento
+# accidental) dispare la actualización dos veces.
+# ------------------------------------------------------------------
+if "guardado_en_proceso" not in st.session_state:
+    st.session_state.guardado_en_proceso = False
+
 try:
     df = cargar_predicciones()
 except Exception as e:
@@ -578,6 +586,7 @@ with st.form("form_verificacion"):
     guardar = st.form_submit_button(
         "💾 Guardar cambios",
         use_container_width=True,
+        disabled=st.session_state.guardado_en_proceso,
     )
 
 if guardar:
