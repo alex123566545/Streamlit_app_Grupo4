@@ -34,12 +34,15 @@ MODELO_NOMBRE = "random_forest_sin_lote29_v1"
 # ------------------------------------------------------------------
 # SUPABASE STORAGE
 #
-# Los .pkl ya no están en disco local, están en el Storage de
-# Supabase, dentro del bucket "models" (ajustar BUCKET_NAME si el
-# bucket real tiene otro nombre).
+# Los .pkl están en el Storage de Supabase, dentro del bucket
+# "models" (ajustar BUCKET_NAME si el bucket real tiene otro
+# nombre).
 #
 # SUPABASE_URL y SUPABASE_KEY se importan de utils.database, que ya
-# las lee desde el .env (ver database.py).
+# apuntan al mismo proyecto que get_connection() (Proyecto A:
+# cuxppijddpiuaxwyswfb). No se definen credenciales nuevas aquí,
+# precisamente para evitar el problema de mezclar proyectos que
+# tuvimos antes.
 # ------------------------------------------------------------------
 BUCKET_NAME = "models"
 
@@ -237,7 +240,7 @@ st.caption(
 try:
     modelo, encoders, umbral = cargar_artefactos_modelo()
 except Exception as e:
-    st.error("❌ No se pudo cargar el modelo, los encoders o el umbral.")
+    st.error("❌ No se pudo cargar el modelo, los encoders o el umbral desde Supabase Storage.")
     st.exception(e)
     st.stop()
 
