@@ -19,4 +19,4 @@ def get_connection():
 # (Project Settings > API Keys en el dashboard de Supabase).
 # ------------------------------------------------------------------
 SUPABASE_URL = "https://cuxppijddpiuaxwyswfb.supabase.co"
-SUPABASE_KEY = "sb_publishable_y1wP5ZIz5elf33-CJkYmvw_gYI6dAyA"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN1eHBwaWpkZHBpdWF4d3lzd2ZiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NjQ5Mjc0NCwiZXhwIjoyMTAyMDY4NzQ0fQ.YhAz188CHfNLhQTEUca-y5EOXuSXMWthZgo02oYFaxw"
