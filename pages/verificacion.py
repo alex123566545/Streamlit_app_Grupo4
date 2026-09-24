@@ -160,8 +160,8 @@ def es_zona_gris(riesgo_alto_predicho, probabilidad, umbral, margen=MARGEN_ALERT
 st.title("🐄 SIPREM-BOVINO")
 st.subheader("Verificación y seguimiento de predicciones")
 st.caption(
-    "Cada semana se genera una nueva predicción sobre la posibilidad de "
-    "al menos un episodio de riesgo alto durante las próximas 4 semanas."
+    "Registre la intervención y, cuando hayan transcurrido 4 semanas "
+    "desde la predicción, confirme el resultado real."
 )
 
 # ------------------------------------------------------------------
@@ -221,82 +221,19 @@ c3.metric("Listas para verificar", listas_verificar)
 c4.metric("Verificadas", verificados)
 c5.metric("Fechas futuras", fechas_futuras)
 c6.metric(
-    "⚠️ Cerca del umbral",
+    "⚠️ En zona gris",
     en_zona_gris,
     help=(
-        "Predicciones BAJO cuya probabilidad está cerca del umbral. "
-        "Todavía no significa que exista un error."
+        f"Riesgo BAJO predicho, pero con probabilidad a menos de "
+        f"{MARGEN_ALERTA_UMBRAL:.0%} del umbral utilizado. "
+        "Posibles falsos negativos 'por poco'."
     ),
 )
 
 st.divider()
 
-# ==============================================================
-# PREDICCIONES HABILITADAS PARA VERIFICAR
-# ==============================================================
-st.subheader("✅ Predicciones listas para verificar")
-
-df_listas = df[
-    (~df["verificado"].fillna(False))
-    & (df["dias_desde_prediccion"] >= HORIZONTE_DIAS)
-].copy()
-
-if df_listas.empty:
-    st.info(
-        "No hay predicciones listas para verificar en este momento."
-    )
-else:
-    st.success(
-        f"{len(df_listas)} predicción(es) ya cumplen las 4 semanas "
-        "y pueden verificarse."
-    )
-
-    tabla_listas = df_listas[
-        [
-            "id_lote",
-            "fecha",
-            "probabilidad_riesgo_predicha",
-            "umbral_utilizado",
-            "riesgo_texto",
-            "zona_gris",
-        ]
-    ].copy()
-
-    tabla_listas.rename(
-        columns={
-            "id_lote": "Lote",
-            "fecha": "Fecha",
-            "probabilidad_riesgo_predicha": "Probabilidad",
-            "umbral_utilizado": "Umbral",
-            "riesgo_texto": "Riesgo",
-            "zona_gris": "Cerca del umbral",
-        },
-        inplace=True,
-    )
-
-    tabla_listas["Probabilidad"] = (
-        tabla_listas["Probabilidad"].astype(float) * 100
-    ).round(1).astype(str) + "%"
-
-    tabla_listas["Umbral"] = (
-        tabla_listas["Umbral"].astype(float) * 100
-    ).round(1).astype(str) + "%"
-
-    tabla_listas["Cerca del umbral"] = (
-        tabla_listas["Cerca del umbral"]
-        .map({True: "⚠️ Sí", False: "—"})
-    )
-
-    st.dataframe(
-        tabla_listas,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-st.divider()
-
 st.subheader("🔎 Filtros")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     lotes = ["Todos"] + sorted(
@@ -324,14 +261,8 @@ with c4:
 
 with c5:
     filtro_zona_gris = st.selectbox(
-        "Cerca del umbral",
-        ["Todas", "Solo cerca del umbral"],
-    )
-
-with c6:
-    filtro_verificables = st.selectbox(
-        "Disponibilidad",
-        ["Todas", "Solo listas para verificar"],
+        "Zona gris",
+        ["Todas", "Solo zona gris"],
     )
 
 df_filtrado = df.copy()
@@ -356,14 +287,8 @@ if filtro_distrito != "Todos":
         df_filtrado["distrito"].astype(str) == filtro_distrito
     ]
 
-if filtro_zona_gris == "Solo cerca del umbral":
+if filtro_zona_gris == "Solo zona gris":
     df_filtrado = df_filtrado[df_filtrado["zona_gris"]]
-
-if filtro_verificables == "Solo listas para verificar":
-    df_filtrado = df_filtrado[
-        (~df_filtrado["verificado"].fillna(False))
-        & (df_filtrado["dias_desde_prediccion"] >= HORIZONTE_DIAS)
-    ]
 
 st.subheader("📋 Predicciones")
 
@@ -425,32 +350,15 @@ st.dataframe(
 st.divider()
 st.subheader("🩺 Verificar / actualizar una predicción")
 
-# Priorizamos los registros que ya están habilitados para verificar.
-df_prioridad = df_filtrado[
-    (~df_filtrado["verificado"].fillna(False))
-    & (df_filtrado["dias_desde_prediccion"] >= HORIZONTE_DIAS)
-].copy()
-
-if df_prioridad.empty:
-    df_prioridad = df_filtrado.copy()
-
 opciones = []
-for _, fila in df_prioridad.iterrows():
+for _, fila in df_filtrado.iterrows():
     prob = float(fila["probabilidad_riesgo_predicha"])
     marca_zona_gris = " ⚠️" if fila["zona_gris"] else ""
-    estado = (
-        "LISTA PARA VERIFICAR"
-        if (
-            not bool(fila["verificado"])
-            and fila["dias_desde_prediccion"] >= HORIZONTE_DIAS
-        )
-        else fila["estado_texto"]
-    )
     opciones.append(
         (
             f"{fila['id_lote']} | {fila['fecha']} | "
             f"{fila['riesgo_texto']} | {prob:.2%} | "
-            f"{estado}{marca_zona_gris}",
+            f"{fila['estado_texto']}{marca_zona_gris}",
             fila["id_lote"],
             fila["fecha"],
             fila["modelo_utilizado"],
@@ -481,25 +389,24 @@ c3.write("🔴 ALTO" if bool(fila["riesgo_alto_predicho"]) else "🟢 BAJO")
 c4.write("**Probabilidad**")
 c4.write(f"{float(fila['probabilidad_riesgo_predicha']):.2%}")
 
-st.info(
-    "📅 Esta predicción evalúa la posibilidad de **al menos un episodio "
-    "de riesgo alto durante las próximas 4 semanas**. "
-    "La predicción se genera semanalmente, pero no representa solo la semana siguiente."
-)
-
 # ------------------------------------------------------------------
-# Advertencia de zona gris, solo como señal de seguimiento.
+# NUEVO: advertencia de zona gris para la predicción seleccionada.
+#
+# Aunque el modelo haya dicho "riesgo BAJO", si la probabilidad
+# estuvo muy cerca del umbral, se avisa que podría valer la pena
+# un seguimiento preventivo aunque no haya alerta formal.
 # ------------------------------------------------------------------
 if bool(fila["zona_gris"]):
     margen = float(fila["umbral_utilizado"]) - float(
         fila["probabilidad_riesgo_predicha"]
     )
     st.warning(
-        f"⚠️ Cerca del umbral: probabilidad "
-        f"{float(fila['probabilidad_riesgo_predicha']):.1%} "
-        f"vs. umbral {float(fila['umbral_utilizado']):.1%}. "
-        "El modelo clasificó BAJO; esta señal solo indica que estuvo cerca "
-        "del punto de decisión."
+        f"⚠️ Riesgo BAJO predicho, pero la probabilidad "
+        f"({float(fila['probabilidad_riesgo_predicha']):.1%}) está muy "
+        f"cerca del umbral ({float(fila['umbral_utilizado']):.1%}), "
+        f"con un margen de solo {margen:.1%}. "
+        "Podría valer la pena un seguimiento preventivo aunque el "
+        "modelo no haya generado una alerta formal."
     )
 
 dias_transcurridos = (HOY - fecha_prediccion).days
@@ -507,17 +414,24 @@ fecha_verificable = fecha_prediccion + timedelta(days=HORIZONTE_DIAS)
 
 if dias_transcurridos < 0:
     st.warning(
-        f"🕐 Predicción futura. Disponible para verificación desde {fecha_verificable}."
+        f"🕐 Esta predicción es futura ({fecha_prediccion}). "
+        f"No puede verificarse todavía. "
+        f"Podrá verificarse desde aproximadamente {fecha_verificable}."
     )
     puede_verificar = False
 elif dias_transcurridos < HORIZONTE_DIAS:
     faltan = HORIZONTE_DIAS - dias_transcurridos
     st.warning(
-        f"⏳ Aún no disponible. Faltan {faltan} días para completar las 4 semanas."
+        f"⏳ Han transcurrido {dias_transcurridos} días. "
+        f"Faltan {faltan} días para completar las 4 semanas. "
+        f"Fecha de verificación: {fecha_verificable}."
     )
     puede_verificar = False
 else:
-    st.success("✅ Predicción habilitada para verificación.")
+    st.success(
+        f"✅ Han transcurrido {dias_transcurridos} días. "
+        "El registro ya puede verificarse."
+    )
     puede_verificar = True
 
 intervencion_actual = fila["intervencion_realizada"]
@@ -551,163 +465,129 @@ with c3:
 
 st.divider()
 
-# ==============================================================
-# INTERVENCIÓN: FUERA DEL FORM PARA QUE APAREZCA INMEDIATAMENTE
-# ==============================================================
-st.markdown("## 1️⃣ Intervención")
+with st.form("form_verificacion"):
 
-opciones_intervencion = [
-    "No registrado todavía",
-    "Sí",
-    "No",
-]
+    st.markdown("## 1️⃣ Registro de intervención")
 
-intervencion_actual = fila["intervencion_realizada"]
-opcion_actual = opcion_intervencion_actual(intervencion_actual)
+    opciones_intervencion = [
+        "No registrado todavía",
+        "Sí",
+        "No",
+    ]
 
-if "intervencion_ui" not in st.session_state:
-    st.session_state.intervencion_ui = opcion_actual
+    opcion_actual = opcion_intervencion_actual(intervencion_actual)
 
-opcion_intervencion = st.radio(
-    "¿Se realizó una intervención?",
-    opciones_intervencion,
-    index=opciones_intervencion.index(
-        st.session_state.intervencion_ui
-    ),
-    horizontal=True,
-    key=f"intervencion_{id_lote}_{fecha_prediccion}_{modelo}",
-)
-
-st.session_state.intervencion_ui = opcion_intervencion
-
-tipo_actual = (
-    "" if pd.isna(fila["tipo_intervencion"])
-    else str(fila["tipo_intervencion"])
-)
-
-resultado_actual = (
-    "" if pd.isna(fila["resultado_intervencion"])
-    else str(fila["resultado_intervencion"])
-)
-
-fecha_intervencion_actual = fecha_a_date(
-    fila["fecha_intervencion"]
-)
-
-# El recuadro aparece inmediatamente cuando se selecciona "Sí".
-if opcion_intervencion == "Sí":
-
-    st.markdown(
-        """
-        <div style="
-            background:#151923;
-            border:1px solid rgba(79,142,255,0.28);
-            border-left:4px solid #4f8eff;
-            border-radius:12px;
-            padding:1rem;
-            margin:0.5rem 0 1rem 0;">
-            <b style="color:white;">🩺 Datos de la intervención</b>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    opcion_intervencion = st.selectbox(
+        "¿Se realizó una intervención?",
+        opciones_intervencion,
+        index=opciones_intervencion.index(opcion_actual),
     )
 
-    tipo_intervencion = st.text_input(
-        "Tipo de intervención",
-        value=tipo_actual,
-        placeholder="Ej.: tratamiento veterinario, ajuste alimentario...",
+    tipo_actual = (
+        "" if pd.isna(fila["tipo_intervencion"])
+        else str(fila["tipo_intervencion"])
     )
 
-    fecha_intervencion = st.date_input(
-        "Fecha de intervención",
-        value=(
-            fecha_intervencion_actual
-            if fecha_intervencion_actual is not None
-            else HOY
-        ),
+    resultado_actual = (
+        "" if pd.isna(fila["resultado_intervencion"])
+        else str(fila["resultado_intervencion"])
     )
 
-    resultado_intervencion = st.text_area(
-        "Resultado de la intervención",
-        value=resultado_actual,
-        placeholder="Ej.: mejora, respuesta parcial, sin cambios...",
+    fecha_intervencion_actual = fecha_a_date(
+        fila["fecha_intervencion"]
     )
 
-else:
-    tipo_intervencion = ""
-    fecha_intervencion = None
-    resultado_intervencion = ""
+    if opcion_intervencion == "Sí":
+        tipo_intervencion = st.text_input(
+            "Tipo de intervención",
+            value=tipo_actual,
+            placeholder=(
+                "Ej.: tratamiento veterinario, ajuste alimentario, "
+                "aislamiento..."
+            ),
+        )
 
-# ==============================================================
-# VERIFICACIÓN
-# ==============================================================
-st.markdown("## 2️⃣ Resultado de las próximas 4 semanas")
+        fecha_intervencion = st.date_input(
+            "Fecha de intervención",
+            value=(
+                fecha_intervencion_actual
+                if fecha_intervencion_actual is not None
+                else HOY
+            ),
+        )
 
-st.caption(
-    "Solo se habilita cuando han transcurrido 28 días desde la predicción."
-)
+        resultado_intervencion = st.text_area(
+            "Resultado de la intervención",
+            value=resultado_actual,
+            placeholder=(
+                "Ej.: mejora del estado general, respuesta parcial..."
+            ),
+        )
+    else:
+        tipo_intervencion = ""
+        fecha_intervencion = None
+        resultado_intervencion = ""
 
-if verificado_actual:
+    st.divider()
+    st.markdown("## 2️⃣ Verificación del resultado a 4 semanas")
 
-    st.success("✅ Esta predicción ya está verificada.")
+    if verificado_actual:
+        st.success("✅ Esta predicción ya fue verificada.")
 
-    target_actual_bool = (
-        None
-        if pd.isna(fila["target_riesgo_alto_4sem_real"])
-        else bool(fila["target_riesgo_alto_4sem_real"])
+        target_actual_bool = (
+            None
+            if pd.isna(fila["target_riesgo_alto_4sem_real"])
+            else bool(fila["target_riesgo_alto_4sem_real"])
+        )
+
+        resultado_default = (
+            "Riesgo alto"
+            if target_actual_bool is True
+            else "No hubo riesgo alto"
+        )
+
+        resultado_verificacion = st.radio(
+            "Resultado real registrado",
+            ["Riesgo alto", "No hubo riesgo alto"],
+            index=["Riesgo alto", "No hubo riesgo alto"].index(
+                resultado_default
+            ),
+            horizontal=True,
+        )
+
+        confirmar_verificacion = st.checkbox(
+            "Mantener la verificación confirmada",
+            value=True,
+        )
+
+    elif puede_verificar:
+        st.success("✅ Ya se cumplieron las 4 semanas.")
+
+        confirmar_verificacion = st.checkbox(
+            "Confirmar que ya se verificó el resultado real"
+        )
+
+        resultado_verificacion = st.radio(
+            "Resultado real después de las 4 semanas",
+            ["Riesgo alto", "No hubo riesgo alto"],
+            horizontal=True,
+        )
+
+    else:
+        confirmar_verificacion = False
+        resultado_verificacion = None
+        st.info(
+            f"La verificación se habilitará cuando se cumplan "
+            f"{HORIZONTE_DIAS} días desde la fecha de predicción."
+        )
+
+    st.divider()
+
+    guardar = st.form_submit_button(
+        "💾 Guardar cambios",
+        use_container_width=True,
+        disabled=st.session_state.guardado_en_proceso,
     )
-
-    resultado_default = (
-        "Hubo al menos un episodio de riesgo alto"
-        if target_actual_bool is True
-        else "No hubo ningún episodio de riesgo alto"
-    )
-
-    resultado_verificacion = st.radio(
-        "Resultado real de la ventana de 4 semanas",
-        [
-            "Hubo al menos un episodio de riesgo alto",
-            "No hubo ningún episodio de riesgo alto",
-        ],
-        index=[
-            "Hubo al menos un episodio de riesgo alto",
-            "No hubo ningún episodio de riesgo alto",
-        ].index(resultado_default),
-        horizontal=True,
-    )
-
-    confirmar_verificacion = True
-
-elif puede_verificar:
-
-    confirmar_verificacion = st.checkbox(
-        "Confirmar resultado real de las 4 semanas"
-    )
-
-    resultado_verificacion = st.radio(
-        "Resultado real",
-        [
-            "Hubo al menos un episodio de riesgo alto",
-            "No hubo ningún episodio de riesgo alto",
-        ],
-        horizontal=True,
-    )
-
-else:
-
-    confirmar_verificacion = False
-    resultado_verificacion = None
-    st.info("Todavía no está habilitada para verificación.")
-
-# ==============================================================
-# GUARDAR
-# ==============================================================
-guardar = st.button(
-    "💾 Guardar cambios",
-    use_container_width=True,
-    disabled=st.session_state.guardado_en_proceso,
-)
-
 
 if guardar:
 
@@ -782,7 +662,7 @@ if guardar:
 
         target_db = (
             True
-            if resultado_verificacion == "Hubo al menos un episodio de riesgo alto"
+            if resultado_verificacion == "Riesgo alto"
             else False
         )
 
@@ -798,7 +678,7 @@ if guardar:
 
         target_db = (
             True
-            if resultado_verificacion == "Hubo al menos un episodio de riesgo alto"
+            if resultado_verificacion == "Riesgo alto"
             else False
         )
 
