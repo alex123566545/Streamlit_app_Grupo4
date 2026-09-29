@@ -425,37 +425,85 @@ st.dataframe(
 st.divider()
 st.subheader("🩺 Verificar / actualizar una predicción")
 
-# Priorizamos los registros que ya están habilitados para verificar.
-df_prioridad = df_filtrado[
+# ------------------------------------------------------------------
+# NUEVO: dos combos independientes según el estado de la predicción.
+#
+#   - "Listas para verificar": ya pasaron las 4 semanas.
+#   - "Pendientes (aún no cumplen 4 semanas)": todavía en ventana de
+#     espera, pero igual se pueden abrir para, por ejemplo, registrar
+#     una intervención temprana.
+#
+# Un radio decide cuál de los dos combos se usa para la selección,
+# evitando ambigüedad sobre cuál predicción quedó elegida.
+# ------------------------------------------------------------------
+
+df_listas_sel = df_filtrado[
     (~df_filtrado["verificado"].fillna(False))
     & (df_filtrado["dias_desde_prediccion"] >= HORIZONTE_DIAS)
 ].copy()
 
-if df_prioridad.empty:
-    df_prioridad = df_filtrado.copy()
+df_pendientes_sel = df_filtrado[
+    (~df_filtrado["verificado"].fillna(False))
+    & (df_filtrado["dias_desde_prediccion"] < HORIZONTE_DIAS)
+].copy()
 
-opciones = []
-for _, fila in df_prioridad.iterrows():
-    prob = float(fila["probabilidad_riesgo_predicha"])
-    marca_zona_gris = " ⚠️" if fila["zona_gris"] else ""
-    estado = (
-        "LISTA PARA VERIFICAR"
-        if (
-            not bool(fila["verificado"])
-            and fila["dias_desde_prediccion"] >= HORIZONTE_DIAS
+df_verificadas_sel = df_filtrado[
+    df_filtrado["verificado"].fillna(False)
+].copy()
+
+
+def construir_opciones(df_origen):
+    opciones_local = []
+    for _, fila in df_origen.iterrows():
+        prob = float(fila["probabilidad_riesgo_predicha"])
+        marca_zona_gris = " ⚠️" if fila["zona_gris"] else ""
+
+        if bool(fila["verificado"]):
+            estado = "VERIFICADA"
+        elif fila["dias_desde_prediccion"] >= HORIZONTE_DIAS:
+            estado = "LISTA PARA VERIFICAR"
+        elif fila["dias_desde_prediccion"] < 0:
+            faltan_txt = "futura"
+            estado = f"PENDIENTE ({faltan_txt})"
+        else:
+            faltan = HORIZONTE_DIAS - fila["dias_desde_prediccion"]
+            estado = f"PENDIENTE (faltan {faltan} días)"
+
+        opciones_local.append(
+            (
+                f"{fila['id_lote']} | {fila['fecha']} | "
+                f"{fila['riesgo_texto']} | {prob:.2%} | "
+                f"{estado}{marca_zona_gris}",
+                fila["id_lote"],
+                fila["fecha"],
+                fila["modelo_utilizado"],
+            )
         )
-        else fila["estado_texto"]
-    )
-    opciones.append(
-        (
-            f"{fila['id_lote']} | {fila['fecha']} | "
-            f"{fila['riesgo_texto']} | {prob:.2%} | "
-            f"{estado}{marca_zona_gris}",
-            fila["id_lote"],
-            fila["fecha"],
-            fila["modelo_utilizado"],
-        )
-    )
+    return opciones_local
+
+
+fuente = st.radio(
+    "¿Qué predicciones quieres ver?",
+    [
+        f"✅ Listas para verificar ({len(df_listas_sel)})",
+        f"⏳ Pendientes — aún no cumplen 4 semanas ({len(df_pendientes_sel)})",
+        f"📗 Ya verificadas ({len(df_verificadas_sel)})",
+    ],
+    horizontal=True,
+)
+
+if fuente.startswith("✅"):
+    df_origen_seleccion = df_listas_sel
+elif fuente.startswith("⏳"):
+    df_origen_seleccion = df_pendientes_sel
+else:
+    df_origen_seleccion = df_verificadas_sel
+
+if df_origen_seleccion.empty:
+    st.info("No hay predicciones en esta categoría con los filtros actuales.")
+    st.stop()
+
+opciones = construir_opciones(df_origen_seleccion)
 
 seleccion = st.selectbox(
     "Seleccione la predicción",
