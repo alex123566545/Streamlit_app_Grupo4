@@ -232,6 +232,72 @@ c6.metric(
 st.divider()
 
 # ==============================================================
+# NUEVO: ESTADO ACTUAL POR LOTE (solo la predicción más reciente)
+#
+# Esta sección es solo para consulta rápida de "¿cómo está el lote
+# HOY?". NO reemplaza ni oculta nada del flujo de verificación de
+# abajo: las predicciones antiguas de un lote, aunque ya exista una
+# más nueva, SIGUEN necesitando verificarse a sus propias 4 semanas
+# -- ocultarlas ahí perdería para siempre esos datos, que son
+# justamente los que alimentan el reentrenamiento.
+# ==============================================================
+st.subheader("📌 Estado actual por lote (última predicción)")
+st.caption(
+    "Solo para consulta rápida: muestra únicamente la predicción más "
+    "reciente de cada lote. Las predicciones anteriores no desaparecen "
+    "-- siguen disponibles más abajo para su verificación."
+)
+
+df_estado_actual = (
+    df.sort_values("fecha")
+    .groupby("id_lote", as_index=False)
+    .tail(1)
+    .sort_values("fecha", ascending=False)
+    .copy()
+)
+
+tabla_estado_actual = df_estado_actual[
+    [
+        "id_lote",
+        "distrito",
+        "fecha",
+        "probabilidad_riesgo_predicha",
+        "riesgo_texto",
+        "zona_gris",
+        "estado_texto",
+    ]
+].copy()
+
+tabla_estado_actual.rename(
+    columns={
+        "id_lote": "Lote",
+        "distrito": "Distrito",
+        "fecha": "Última predicción",
+        "probabilidad_riesgo_predicha": "Probabilidad",
+        "riesgo_texto": "Riesgo",
+        "zona_gris": "Cerca del umbral",
+        "estado_texto": "Verificación",
+    },
+    inplace=True,
+)
+
+tabla_estado_actual["Probabilidad"] = (
+    tabla_estado_actual["Probabilidad"].astype(float) * 100
+).round(1).astype(str) + "%"
+
+tabla_estado_actual["Cerca del umbral"] = tabla_estado_actual[
+    "Cerca del umbral"
+].map({True: "⚠️ Sí", False: "—"})
+
+st.dataframe(
+    tabla_estado_actual,
+    use_container_width=True,
+    hide_index=True,
+)
+
+st.divider()
+
+# ==============================================================
 # PREDICCIONES HABILITADAS PARA VERIFICAR
 # ==============================================================
 st.subheader("✅ Predicciones listas para verificar")
@@ -447,9 +513,14 @@ df_pendientes_sel = df_filtrado[
     & (df_filtrado["dias_desde_prediccion"] < HORIZONTE_DIAS)
 ].copy()
 
-df_verificadas_sel = df_filtrado[
-    df_filtrado["verificado"].fillna(False)
-].copy()
+df_verificadas_sel = (
+    df_filtrado[df_filtrado["verificado"].fillna(False)]
+    .sort_values("fecha")
+    .groupby("id_lote", as_index=False)
+    .tail(1)
+    .sort_values("fecha", ascending=False)
+    .copy()
+)
 
 
 def construir_opciones(df_origen):
