@@ -1,119 +1,218 @@
 import streamlit as st
 import pandas as pd
+import pickle
 from datetime import date, datetime, timedelta, timezone
 
-from utils.database import get_connection
+from supabase import create_client
+
+from utils.database import get_connection, SUPABASE_URL, SUPABASE_KEY
+from src.config.settings import FEATURES
 
 st.set_page_config(
-    page_title="SIPREM-BOVINO | Verificación",
-    page_icon="🐄",
+    page_title="SIPREM-BOVINO | Nueva predicción",
+    page_icon="🔮",
     layout="wide",
 )
 
-HORIZONTE_DIAS = 28
 TIMEZONE_PERU = timezone(timedelta(hours=-5))
 HOY = datetime.now(TIMEZONE_PERU).date()
 
 # ------------------------------------------------------------------
-# NUEVO: margen de "zona gris".
+# CAMBIO DE ENFOQUE:
 #
-# Si el riesgo predicho es BAJO pero la probabilidad está a menos
-# de este margen del umbral utilizado, se muestra una advertencia:
-# el modelo no marcó alerta, pero estuvo cerca de hacerlo.
+# Antes, la app tomaba SIEMPRE la fila de features MÁS RECIENTE de
+# cada lote (MAX(fecha)). Esto tiene un problema serio: si un lote
+# tiene varias semanas de features ya cargadas pero todavía sin
+# predecir (por ejemplo, un backlog histórico), la app saltaba
+# directo a la última semana y las anteriores JAMÁS se predecían
+# -- perdiendo para siempre esos datos, que son justo los que
+# después alimentan el reentrenamiento vía verificación.
+#
+# Ahora, para cada lote, se busca la PRIMERA semana pendiente (la
+# más antigua que todavía no tenga una predicción con este modelo)
+# y se avanza en orden, una semana a la vez -- igual que ya vienen
+# espaciadas en gold_ml.dataset_prediccion (cada 7 días).
+#
+# La única restricción real que se mantiene es no predecir una
+# semana cuya fecha todavía no ha llegado (fecha > HOY): eso sí
+# seguiría siendo "predecir el futuro antes de tiempo".
 # ------------------------------------------------------------------
-MARGEN_ALERTA_UMBRAL = 0.10
 
+MODELO_NOMBRE = "random_forest_sin_lote29_v1"
+
+BUCKET_NAME = "models"
+
+MODEL_FILE = "model.pkl"
+ENCODERS_FILE = "encoders.pkl"
+THRESHOLD_FILE = "threshold_rf_sin_lote29.pkl"
+
+
+# ============================================================
+# CARGA DE MODELO, ENCODERS Y UMBRAL DESDE SUPABASE STORAGE
+# ============================================================
+
+@st.cache_resource
+def obtener_cliente_supabase():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def descargar_pickle(cliente, nombre_archivo):
+    contenido = cliente.storage.from_(BUCKET_NAME).download(nombre_archivo)
+    return pickle.loads(contenido)
+
+
+@st.cache_resource
+def cargar_artefactos_modelo():
+    cliente = obtener_cliente_supabase()
+    modelo = descargar_pickle(cliente, MODEL_FILE)
+    encoders = descargar_pickle(cliente, ENCODERS_FILE)
+    umbral = descargar_pickle(cliente, THRESHOLD_FILE)
+    return modelo, encoders, umbral
+
+
+# ============================================================
+# DATOS: TODAS las semanas pendientes de predecir, por lote
+# ============================================================
 
 @st.cache_data(ttl=30)
-def cargar_predicciones():
+def cargar_features_pendientes(modelo_utilizado):
+    """
+    Trae TODAS las filas de gold_ml.dataset_prediccion que todavía
+    NO tienen una predicción guardada con este modelo (LEFT JOIN +
+    IS NULL), ordenadas por lote y fecha ASCENDENTE -- para poder
+    procesar el backlog respetando el orden cronológico real.
+    """
     conn = get_connection()
     try:
         query = """
-            SELECT
-                id_lote,
-                fecha,
-                distrito,
-                categoria_zootecnica,
-                raza_predominante,
-                modelo_utilizado,
-                umbral_utilizado,
-                probabilidad_riesgo_predicha,
-                riesgo_alto_predicho,
-                intervencion_realizada,
-                tipo_intervencion,
-                fecha_intervencion,
-                resultado_intervencion,
-                verificado,
-                target_riesgo_alto_4sem_real,
-                fecha_verificacion,
-                predicho_en
-            FROM gold_ml.predicciones
-            ORDER BY fecha DESC, id_lote ASC;
+            SELECT dp.*
+            FROM gold_ml.dataset_prediccion dp
+            LEFT JOIN gold_ml.predicciones p
+                ON p.id_lote = dp.id_lote
+                AND p.fecha = dp.fecha
+                AND p.modelo_utilizado = %s
+            WHERE p.id IS NULL
+            ORDER BY dp.id_lote, dp.fecha ASC;
         """
-        return pd.read_sql(query, conn)
+        return pd.read_sql(query, conn, params=(modelo_utilizado,))
     finally:
         conn.close()
 
 
-def actualizar_prediccion(
-    id_lote,
-    fecha_prediccion,
-    modelo_utilizado,
-    intervencion_realizada,
-    tipo_intervencion,
-    fecha_intervencion,
-    resultado_intervencion,
-    verificado,
-    target_real,
-):
+@st.cache_data(ttl=30)
+def cargar_ultima_prediccion_por_lote(modelo_utilizado):
     """
-    Actualiza solo los campos de seguimiento.
-    No modifica las features ni la salida original del modelo.
+    Última fecha ya predicha por lote con este modelo -- se usa solo
+    como referencia informativa (para mostrar el "salto" real en
+    días entre la última predicción y la siguiente pendiente).
     """
     conn = get_connection()
     try:
         query = """
-            UPDATE gold_ml.predicciones
-            SET
-                intervencion_realizada = %s,
-                tipo_intervencion = %s,
-                fecha_intervencion = %s,
-                resultado_intervencion = %s,
-                verificado = %s,
-                target_riesgo_alto_4sem_real = %s,
-                fecha_verificacion =
-                    CASE
-                        WHEN %s = TRUE
-                        THEN COALESCE(fecha_verificacion, NOW())
-                        ELSE fecha_verificacion
-                    END
-            WHERE
-                id_lote = %s
-                AND fecha = %s
-                AND modelo_utilizado = %s;
+            SELECT id_lote, MAX(fecha) AS ultima_fecha_predicha
+            FROM gold_ml.predicciones
+            WHERE modelo_utilizado = %s
+            GROUP BY id_lote;
+        """
+        return pd.read_sql(query, conn, params=(modelo_utilizado,))
+    finally:
+        conn.close()
+
+
+# ============================================================
+# TRANSFORMACIÓN DE FEATURES (misma lógica que en entrenamiento)
+# ============================================================
+
+def preparar_nulos(X):
+    X = X.copy()
+    if "actividad_sensor_indice" in X.columns:
+        X["actividad_sensor_indice"] = X["actividad_sensor_indice"].fillna(-1)
+    return X
+
+
+def transformar_features(X, encoders):
+    X = X.copy()
+    for col, encoder in encoders.items():
+        if col not in X.columns:
+            continue
+        valores = X[col].astype(str)
+        mapping = {clase: i for i, clase in enumerate(encoder.classes_)}
+        X[col] = valores.map(mapping).fillna(-1).astype(int)
+    return X
+
+
+def predecir_fila(modelo, encoders, umbral, fila_features):
+    X = pd.DataFrame([fila_features[FEATURES]])
+    X = preparar_nulos(X)
+    X = transformar_features(X, encoders)
+
+    probabilidad = float(modelo.predict_proba(X)[:, 1][0])
+    riesgo_alto = probabilidad >= umbral
+
+    return probabilidad, riesgo_alto
+
+
+# ============================================================
+# GUARDAR PREDICCIÓN
+# ============================================================
+
+def guardar_prediccion(fila, probabilidad, riesgo_alto, umbral, modelo_utilizado):
+    conn = get_connection()
+    try:
+        query = """
+            INSERT INTO gold_ml.predicciones (
+                id_lote, fecha,
+                distrito, categoria_zootecnica, raza_predominante,
+                altitud_msnm, distancia_centro_veterinario_km,
+                tamano_lote_cabezas, lote_sensorizado, uso_registro_digital,
+                cobertura_vacunacion_pct, dias_desde_desparasitacion,
+                animales_nuevos_30d, casos_respiratorios, casos_diarreicos,
+                temperatura_min_c, temperatura_media_c, temperatura_max_c,
+                humedad_relativa_pct, precipitacion_semanal_mm,
+                condicion_pastura_indice, indice_ndvi_satelital,
+                consumo_ms_kg_animal_dia, agua_l_animal_dia,
+                actividad_sensor_indice, condicion_corporal_prom,
+                precio_leche_local_s_kg,
+                semana_sin, semana_cos,
+                media_movil_4s_pastura, media_movil_4s_condicion_corporal,
+                media_movil_4s_temperatura,
+                modelo_utilizado, umbral_utilizado,
+                probabilidad_riesgo_predicha, riesgo_alto_predicho
+            )
+            VALUES (
+                %(id_lote)s, %(fecha)s,
+                %(distrito)s, %(categoria_zootecnica)s, %(raza_predominante)s,
+                %(altitud_msnm)s, %(distancia_centro_veterinario_km)s,
+                %(tamano_lote_cabezas)s, %(lote_sensorizado)s, %(uso_registro_digital)s,
+                %(cobertura_vacunacion_pct)s, %(dias_desde_desparasitacion)s,
+                %(animales_nuevos_30d)s, %(casos_respiratorios)s, %(casos_diarreicos)s,
+                %(temperatura_min_c)s, %(temperatura_media_c)s, %(temperatura_max_c)s,
+                %(humedad_relativa_pct)s, %(precipitacion_semanal_mm)s,
+                %(condicion_pastura_indice)s, %(indice_ndvi_satelital)s,
+                %(consumo_ms_kg_animal_dia)s, %(agua_l_animal_dia)s,
+                %(actividad_sensor_indice)s, %(condicion_corporal_prom)s,
+                %(precio_leche_local_s_kg)s,
+                %(semana_sin)s, %(semana_cos)s,
+                %(media_movil_4s_pastura)s, %(media_movil_4s_condicion_corporal)s,
+                %(media_movil_4s_temperatura)s,
+                %(modelo_utilizado)s, %(umbral_utilizado)s,
+                %(probabilidad_riesgo_predicha)s, %(riesgo_alto_predicho)s
+            )
+            ON CONFLICT (id_lote, fecha, modelo_utilizado) DO NOTHING;
         """
 
-        valores = (
-            intervencion_realizada,
-            tipo_intervencion,
-            fecha_intervencion,
-            resultado_intervencion,
-            verificado,
-            target_real,
-            verificado,
-            id_lote,
-            fecha_prediccion,
-            modelo_utilizado,
-        )
+        valores = fila.to_dict()
+        valores["modelo_utilizado"] = modelo_utilizado
+        valores["umbral_utilizado"] = umbral
+        valores["probabilidad_riesgo_predicha"] = probabilidad
+        valores["riesgo_alto_predicho"] = bool(riesgo_alto)
 
         with conn.cursor() as cur:
             cur.execute(query, valores)
-            if cur.rowcount != 1:
-                raise ValueError(
-                    "No se encontró exactamente una predicción para actualizar."
-                )
+            insertadas = cur.rowcount
 
         conn.commit()
+        return insertadas == 1
     except Exception:
         conn.rollback()
         raise
@@ -121,841 +220,270 @@ def actualizar_prediccion(
         conn.close()
 
 
-def texto_riesgo(valor):
-    if valor is True:
-        return "ALTO"
-    if valor is False:
-        return "BAJO"
-    return "DESCONOCIDO"
+# ============================================================
+# INTERFAZ
+# ============================================================
 
-
-def fecha_a_date(valor):
-    if valor is None or pd.isna(valor):
-        return None
-    if hasattr(valor, "date"):
-        return valor.date()
-    if isinstance(valor, date):
-        return valor
-    return None
-
-
-def opcion_intervencion_actual(valor):
-    if pd.isna(valor):
-        return "No registrado todavía"
-    return "Sí" if bool(valor) else "No"
-
-
-def es_zona_gris(riesgo_alto_predicho, probabilidad, umbral, margen=MARGEN_ALERTA_UMBRAL):
-    """
-    Indica si una predicción de riesgo BAJO estuvo peligrosamente
-    cerca del umbral (posible falso negativo "por poco").
-    """
-    if riesgo_alto_predicho is True:
-        return False
-    if pd.isna(probabilidad) or pd.isna(umbral):
-        return False
-    return (umbral - probabilidad) < margen
-
-
-st.title("🐄 SIPREM-BOVINO")
-st.subheader("Verificación y seguimiento de predicciones")
+st.title("🔮 SIPREM-BOVINO")
+st.subheader("Generar nueva predicción")
 st.caption(
-    "Cada semana se genera una nueva predicción sobre la posibilidad de "
-    "al menos un episodio de riesgo alto durante las próximas 4 semanas."
+    "Cada lote se predice en orden cronológico: primero la semana "
+    "más antigua que aún no tenga predicción, respetando la "
+    "secuencia real de fechas del historial. No se predicen semanas "
+    "cuya fecha todavía no ha llegado."
 )
 
-# ------------------------------------------------------------------
-# NUEVO: bandera para bloquear el botón "Guardar cambios" mientras
-# se procesa un guardado, evitando que un doble clic (o un reintento
-# accidental) dispare la actualización dos veces.
-# ------------------------------------------------------------------
-if "guardado_en_proceso" not in st.session_state:
-    st.session_state.guardado_en_proceso = False
-
 try:
-    df = cargar_predicciones()
+    modelo, encoders, umbral = cargar_artefactos_modelo()
 except Exception as e:
-    st.error("❌ No se pudo leer gold_ml.predicciones.")
+    st.error("❌ No se pudo cargar el modelo, los encoders o el umbral desde Supabase Storage.")
     st.exception(e)
     st.stop()
 
-if df.empty:
-    st.info("No existen predicciones registradas.")
+try:
+    df_pendientes_todas = cargar_features_pendientes(MODELO_NOMBRE)
+except Exception as e:
+    st.error("❌ No se pudo leer gold_ml.dataset_prediccion / gold_ml.predicciones.")
+    st.exception(e)
     st.stop()
 
-df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
-df["riesgo_texto"] = df["riesgo_alto_predicho"].apply(texto_riesgo)
-df["estado_texto"] = df["verificado"].fillna(False).apply(
-    lambda x: "VERIFICADO" if bool(x) else "PENDIENTE"
-)
-df["dias_desde_prediccion"] = df["fecha"].apply(
-    lambda f: (HOY - f).days if pd.notna(f) else None
-)
-
-# NUEVO: bandera de zona gris por fila, para la tabla y las métricas.
-df["zona_gris"] = df.apply(
-    lambda f: es_zona_gris(
-        f["riesgo_alto_predicho"],
-        f["probabilidad_riesgo_predicha"],
-        f["umbral_utilizado"],
-    ),
-    axis=1,
-)
-
-total = len(df)
-pendientes = int((~df["verificado"].fillna(False)).sum())
-verificados = int(df["verificado"].fillna(False).sum())
-listas_verificar = int(
-    (
-        (~df["verificado"].fillna(False))
-        & (df["dias_desde_prediccion"] >= HORIZONTE_DIAS)
-    ).sum()
-)
-fechas_futuras = int((df["dias_desde_prediccion"] < 0).sum())
-en_zona_gris = int(df["zona_gris"].sum())
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Total", total)
-c2.metric("Pendientes", pendientes)
-c3.metric("Listas para verificar", listas_verificar)
-c4.metric("Verificadas", verificados)
-c5.metric("Fechas futuras", fechas_futuras)
-c6.metric(
-    "⚠️ Cerca del umbral",
-    en_zona_gris,
-    help=(
-        "Predicciones BAJO cuya probabilidad está cerca del umbral. "
-        "Todavía no significa que exista un error."
-    ),
-)
-
-st.divider()
-
-# ==============================================================
-# NUEVO: ESTADO ACTUAL POR LOTE (solo la predicción más reciente)
-#
-# Esta sección es solo para consulta rápida de "¿cómo está el lote
-# HOY?". NO reemplaza ni oculta nada del flujo de verificación de
-# abajo: las predicciones antiguas de un lote, aunque ya exista una
-# más nueva, SIGUEN necesitando verificarse a sus propias 4 semanas
-# -- ocultarlas ahí perdería para siempre esos datos, que son
-# justamente los que alimentan el reentrenamiento.
-# ==============================================================
-st.subheader("📌 Estado actual por lote (última predicción)")
-st.caption(
-    "Solo para consulta rápida: muestra únicamente la predicción más "
-    "reciente de cada lote. Las predicciones anteriores no desaparecen "
-    "-- siguen disponibles más abajo para su verificación."
-)
-
-df_estado_actual = (
-    df.sort_values("fecha")
-    .groupby("id_lote", as_index=False)
-    .tail(1)
-    .sort_values("fecha", ascending=False)
-    .copy()
-)
-
-tabla_estado_actual = df_estado_actual[
-    [
-        "id_lote",
-        "distrito",
-        "fecha",
-        "probabilidad_riesgo_predicha",
-        "riesgo_texto",
-        "zona_gris",
-        "estado_texto",
-    ]
-].copy()
-
-tabla_estado_actual.rename(
-    columns={
-        "id_lote": "Lote",
-        "distrito": "Distrito",
-        "fecha": "Última predicción",
-        "probabilidad_riesgo_predicha": "Probabilidad",
-        "riesgo_texto": "Riesgo",
-        "zona_gris": "Cerca del umbral",
-        "estado_texto": "Verificación",
-    },
-    inplace=True,
-)
-
-tabla_estado_actual["Probabilidad"] = (
-    tabla_estado_actual["Probabilidad"].astype(float) * 100
-).round(1).astype(str) + "%"
-
-tabla_estado_actual["Cerca del umbral"] = tabla_estado_actual[
-    "Cerca del umbral"
-].map({True: "⚠️ Sí", False: "—"})
-
-st.dataframe(
-    tabla_estado_actual,
-    use_container_width=True,
-    hide_index=True,
-)
-
-st.divider()
-
-# ==============================================================
-# PREDICCIONES HABILITADAS PARA VERIFICAR
-# ==============================================================
-st.subheader("✅ Predicciones listas para verificar")
-
-df_listas = df[
-    (~df["verificado"].fillna(False))
-    & (df["dias_desde_prediccion"] >= HORIZONTE_DIAS)
-].copy()
-
-if df_listas.empty:
-    st.info(
-        "No hay predicciones listas para verificar en este momento."
-    )
-else:
+if df_pendientes_todas.empty:
     st.success(
-        f"{len(df_listas)} predicción(es) ya cumplen las 4 semanas "
-        "y pueden verificarse."
+        "✅ No hay semanas pendientes de predecir: todos los lotes "
+        "están al día con este modelo."
     )
+    st.stop()
 
-    tabla_listas = df_listas[
-        [
-            "id_lote",
-            "fecha",
-            "probabilidad_riesgo_predicha",
-            "umbral_utilizado",
-            "riesgo_texto",
-            "zona_gris",
-        ]
-    ].copy()
+df_pendientes_todas["fecha"] = pd.to_datetime(df_pendientes_todas["fecha"]).dt.date
 
-    tabla_listas.rename(
-        columns={
-            "id_lote": "Lote",
-            "fecha": "Fecha",
-            "probabilidad_riesgo_predicha": "Probabilidad",
-            "umbral_utilizado": "Umbral",
-            "riesgo_texto": "Riesgo",
-            "zona_gris": "Cerca del umbral",
-        },
-        inplace=True,
-    )
+# ------------------------------------------------------------------
+# Solo se consideran elegibles las semanas cuya fecha ya llegó
+# (fecha <= HOY). Las de fecha futura quedan en espera, pero no se
+# ocultan del backlog -- se muestran aparte para que quede claro
+# que existen pero todavía no corresponde predecirlas.
+# ------------------------------------------------------------------
+df_pendientes_todas["es_futura"] = df_pendientes_todas["fecha"] > HOY
 
-    tabla_listas["Probabilidad"] = (
-        tabla_listas["Probabilidad"].astype(float) * 100
-    ).round(1).astype(str) + "%"
+try:
+    df_ultima_prediccion = cargar_ultima_prediccion_por_lote(MODELO_NOMBRE)
+    if not df_ultima_prediccion.empty:
+        df_ultima_prediccion["ultima_fecha_predicha"] = pd.to_datetime(
+            df_ultima_prediccion["ultima_fecha_predicha"]
+        ).dt.date
+except Exception as e:
+    st.warning("⚠️ No se pudo leer el historial de predicciones previas.")
+    st.exception(e)
+    df_ultima_prediccion = pd.DataFrame(columns=["id_lote", "ultima_fecha_predicha"])
 
-    tabla_listas["Umbral"] = (
-        tabla_listas["Umbral"].astype(float) * 100
-    ).round(1).astype(str) + "%"
+# ------------------------------------------------------------------
+# La "siguiente semana a predecir" de cada lote es la más antigua
+# de su backlog pendiente (primera fila tras ordenar por fecha ASC).
+# ------------------------------------------------------------------
+df_elegible_backlog = df_pendientes_todas[~df_pendientes_todas["es_futura"]].copy()
 
-    tabla_listas["Cerca del umbral"] = (
-        tabla_listas["Cerca del umbral"]
-        .map({True: "⚠️ Sí", False: "—"})
-    )
+df_siguiente = (
+    df_elegible_backlog.sort_values(["id_lote", "fecha"])
+    .groupby("id_lote", as_index=False)
+    .head(1)
+    .copy()
+)
 
-    st.dataframe(
-        tabla_listas,
-        use_container_width=True,
-        hide_index=True,
-    )
+df_siguiente = df_siguiente.merge(df_ultima_prediccion, on="id_lote", how="left")
+
+
+def calcular_info_orden(fila):
+    ultima = fila["ultima_fecha_predicha"]
+    if pd.isna(ultima):
+        return "Primera predicción de este lote"
+    dias = (fila["fecha"] - ultima).days
+    if dias == 7:
+        return "Continúa la secuencia semanal (7 días después)"
+    return f"⚠️ Salto de {dias} días desde la última predicción (revisar continuidad)"
+
+
+df_siguiente["info_orden"] = df_siguiente.apply(calcular_info_orden, axis=1)
+
+# Backlog restante por lote (cuántas semanas pendientes tiene en total,
+# incluyendo la que se predecirá ahora).
+backlog_por_lote = (
+    df_elegible_backlog.groupby("id_lote")
+    .size()
+    .rename("semanas_pendientes")
+    .reset_index()
+)
+df_siguiente = df_siguiente.merge(backlog_por_lote, on="id_lote", how="left")
 
 st.divider()
 
-st.subheader("🔎 Filtros")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+total_lotes_con_backlog = df_siguiente["id_lote"].nunique()
+total_semanas_pendientes = len(df_elegible_backlog)
+total_futuras = int(df_pendientes_todas["es_futura"].sum())
 
-with c1:
-    lotes = ["Todos"] + sorted(
-        df["id_lote"].dropna().astype(str).unique().tolist()
-    )
-    filtro_lote = st.selectbox("Lote", lotes)
+c1, c2, c3 = st.columns(3)
+c1.metric("Lotes con backlog pendiente", total_lotes_con_backlog)
+c2.metric("Semanas pendientes (elegibles)", total_semanas_pendientes)
+c3.metric("Semanas futuras (aún no llegan)", total_futuras)
 
-with c2:
-    filtro_riesgo = st.selectbox(
-        "Riesgo predicho",
-        ["Todos", "ALTO", "BAJO"],
-    )
+st.divider()
 
-with c3:
-    filtro_estado = st.selectbox(
-        "Estado",
-        ["Todos", "PENDIENTE", "VERIFICADO"],
-    )
+# ============================================================
+# TABLA: siguiente semana a predecir por lote
+# ============================================================
 
-with c4:
-    distritos = ["Todos"] + sorted(
-        df["distrito"].dropna().astype(str).unique().tolist()
-    )
-    filtro_distrito = st.selectbox("Distrito", distritos)
+st.subheader("📋 Siguiente semana pendiente por lote")
 
-with c5:
-    filtro_zona_gris = st.selectbox(
-        "Cerca del umbral",
-        ["Todas", "Solo cerca del umbral"],
-    )
-
-with c6:
-    filtro_verificables = st.selectbox(
-        "Disponibilidad",
-        ["Todas", "Solo listas para verificar"],
-    )
-
-df_filtrado = df.copy()
-
-if filtro_lote != "Todos":
-    df_filtrado = df_filtrado[
-        df_filtrado["id_lote"].astype(str) == filtro_lote
-    ]
-
-if filtro_riesgo != "Todos":
-    df_filtrado = df_filtrado[
-        df_filtrado["riesgo_texto"] == filtro_riesgo
-    ]
-
-if filtro_estado != "Todos":
-    df_filtrado = df_filtrado[
-        df_filtrado["estado_texto"] == filtro_estado
-    ]
-
-if filtro_distrito != "Todos":
-    df_filtrado = df_filtrado[
-        df_filtrado["distrito"].astype(str) == filtro_distrito
-    ]
-
-if filtro_zona_gris == "Solo cerca del umbral":
-    df_filtrado = df_filtrado[df_filtrado["zona_gris"]]
-
-if filtro_verificables == "Solo listas para verificar":
-    df_filtrado = df_filtrado[
-        (~df_filtrado["verificado"].fillna(False))
-        & (df_filtrado["dias_desde_prediccion"] >= HORIZONTE_DIAS)
-    ]
-
-st.subheader("📋 Predicciones")
-
-if df_filtrado.empty:
-    st.info("No hay registros con los filtros seleccionados.")
-    st.stop()
-
-tabla = df_filtrado[
-    [
-        "id_lote",
-        "fecha",
-        "distrito",
-        "probabilidad_riesgo_predicha",
-        "umbral_utilizado",
-        "riesgo_texto",
-        "zona_gris",
-        "intervencion_realizada",
-        "estado_texto",
-    ]
+tabla_estado = df_siguiente[
+    ["id_lote", "distrito", "fecha", "semanas_pendientes", "info_orden"]
 ].copy()
 
-tabla.rename(
+tabla_estado.rename(
     columns={
         "id_lote": "Lote",
-        "fecha": "Fecha",
         "distrito": "Distrito",
-        "probabilidad_riesgo_predicha": "Probabilidad",
-        "umbral_utilizado": "Umbral",
-        "riesgo_texto": "Riesgo",
-        "zona_gris": "Zona gris",
-        "intervencion_realizada": "Intervención",
-        "estado_texto": "Verificación",
+        "fecha": "Próxima semana a predecir",
+        "semanas_pendientes": "Semanas pendientes (total)",
+        "info_orden": "Continuidad",
     },
     inplace=True,
 )
 
-tabla["Probabilidad"] = (
-    tabla["Probabilidad"].astype(float) * 100
-).round(2).astype(str) + "%"
+st.dataframe(tabla_estado, use_container_width=True, hide_index=True)
 
-tabla["Umbral"] = (
-    tabla["Umbral"].astype(float) * 100
-).round(1).astype(str) + "%"
-
-tabla["Zona gris"] = tabla["Zona gris"].map({True: "⚠️ Sí", False: "—"})
-
-tabla["Intervención"] = (
-    tabla["Intervención"]
-    .map({True: "Sí", False: "No"})
-    .fillna("No registrada")
-)
-
-st.dataframe(
-    tabla,
-    use_container_width=True,
-    hide_index=True,
-)
+if total_futuras > 0:
+    with st.expander(f"Ver {total_futuras} semana(s) futura(s) aún no elegibles"):
+        tabla_futuras = df_pendientes_todas[df_pendientes_todas["es_futura"]][
+            ["id_lote", "distrito", "fecha"]
+        ].sort_values(["id_lote", "fecha"])
+        st.dataframe(tabla_futuras, use_container_width=True, hide_index=True)
 
 st.divider()
-st.subheader("🩺 Verificar / actualizar una predicción")
 
-# ------------------------------------------------------------------
-# NUEVO: dos combos independientes según el estado de la predicción.
-#
-#   - "Listas para verificar": ya pasaron las 4 semanas.
-#   - "Pendientes (aún no cumplen 4 semanas)": todavía en ventana de
-#     espera, pero igual se pueden abrir para, por ejemplo, registrar
-#     una intervención temprana.
-#
-# Un radio decide cuál de los dos combos se usa para la selección,
-# evitando ambigüedad sobre cuál predicción quedó elegida.
-# ------------------------------------------------------------------
+# ============================================================
+# PREDICCIÓN INDIVIDUAL (siempre la siguiente en orden del lote)
+# ============================================================
 
-df_listas_sel = df_filtrado[
-    (~df_filtrado["verificado"].fillna(False))
-    & (df_filtrado["dias_desde_prediccion"] >= HORIZONTE_DIAS)
-].copy()
+st.subheader("🐄 Predecir un lote (siguiente semana en orden)")
 
-df_pendientes_sel = df_filtrado[
-    (~df_filtrado["verificado"].fillna(False))
-    & (df_filtrado["dias_desde_prediccion"] < HORIZONTE_DIAS)
-].copy()
-
-df_verificadas_sel = (
-    df_filtrado[df_filtrado["verificado"].fillna(False)]
-    .sort_values("fecha")
-    .groupby("id_lote", as_index=False)
-    .tail(1)
-    .sort_values("fecha", ascending=False)
-    .copy()
-)
-
-
-def construir_opciones(df_origen):
-    opciones_local = []
-    for _, fila in df_origen.iterrows():
-        prob = float(fila["probabilidad_riesgo_predicha"])
-        marca_zona_gris = " ⚠️" if fila["zona_gris"] else ""
-
-        if bool(fila["verificado"]):
-            estado = "VERIFICADA"
-        elif fila["dias_desde_prediccion"] >= HORIZONTE_DIAS:
-            estado = "LISTA PARA VERIFICAR"
-        elif fila["dias_desde_prediccion"] < 0:
-            faltan_txt = "futura"
-            estado = f"PENDIENTE ({faltan_txt})"
-        else:
-            faltan = HORIZONTE_DIAS - fila["dias_desde_prediccion"]
-            estado = f"PENDIENTE (faltan {faltan} días)"
-
-        opciones_local.append(
-            (
-                f"{fila['id_lote']} | {fila['fecha']} | "
-                f"{fila['riesgo_texto']} | {prob:.2%} | "
-                f"{estado}{marca_zona_gris}",
-                fila["id_lote"],
-                fila["fecha"],
-                fila["modelo_utilizado"],
-            )
-        )
-    return opciones_local
-
-
-fuente = st.radio(
-    "¿Qué predicciones quieres ver?",
-    [
-        f"✅ Listas para verificar ({len(df_listas_sel)})",
-        f"⏳ Pendientes — aún no cumplen 4 semanas ({len(df_pendientes_sel)})",
-        f"📗 Ya verificadas ({len(df_verificadas_sel)})",
-    ],
-    horizontal=True,
-)
-
-if fuente.startswith("✅"):
-    df_origen_seleccion = df_listas_sel
-elif fuente.startswith("⏳"):
-    df_origen_seleccion = df_pendientes_sel
-else:
-    df_origen_seleccion = df_verificadas_sel
-
-if df_origen_seleccion.empty:
-    st.info("No hay predicciones en esta categoría con los filtros actuales.")
-    st.stop()
-
-opciones = construir_opciones(df_origen_seleccion)
+opciones = [
+    (
+        f"{fila['id_lote']} | siguiente: {fila['fecha']} | "
+        f"{fila['semanas_pendientes']} semana(s) pendiente(s) | {fila['info_orden']}",
+        idx,
+    )
+    for idx, fila in df_siguiente.iterrows()
+]
 
 seleccion = st.selectbox(
-    "Seleccione la predicción",
+    "Seleccione un lote",
     opciones,
     format_func=lambda x: x[0],
 )
 
-_, id_lote, fecha_prediccion, modelo = seleccion
+_, idx_seleccionado = seleccion
+fila_seleccionada = df_siguiente.loc[idx_seleccionado]
 
-fila = df_filtrado[
-    (df_filtrado["id_lote"] == id_lote)
-    & (df_filtrado["fecha"] == fecha_prediccion)
-    & (df_filtrado["modelo_utilizado"] == modelo)
-].iloc[0]
-
-c1, c2, c3, c4 = st.columns(4)
-c1.write("**Lote**")
-c1.write(str(id_lote))
-c2.write("**Fecha**")
-c2.write(str(fecha_prediccion))
-c3.write("**Riesgo predicho**")
-c3.write("🔴 ALTO" if bool(fila["riesgo_alto_predicho"]) else "🟢 BAJO")
-c4.write("**Probabilidad**")
-c4.write(f"{float(fila['probabilidad_riesgo_predicha']):.2%}")
-
-st.info(
-    "📅 Esta predicción evalúa la posibilidad de **al menos un episodio "
-    "de riesgo alto durante las próximas 4 semanas**. "
-    "La predicción se genera semanalmente, pero no representa solo la semana siguiente."
-)
-
-# ------------------------------------------------------------------
-# Advertencia de zona gris, solo como señal de seguimiento.
-# ------------------------------------------------------------------
-if bool(fila["zona_gris"]):
-    margen = float(fila["umbral_utilizado"]) - float(
-        fila["probabilidad_riesgo_predicha"]
-    )
-    st.warning(
-        f"⚠️ Cerca del umbral: probabilidad "
-        f"{float(fila['probabilidad_riesgo_predicha']):.1%} "
-        f"vs. umbral {float(fila['umbral_utilizado']):.1%}. "
-        "El modelo clasificó BAJO; esta señal solo indica que estuvo cerca "
-        "del punto de decisión."
+if fila_seleccionada["semanas_pendientes"] > 1:
+    st.info(
+        f"ℹ️ Este lote tiene {int(fila_seleccionada['semanas_pendientes'])} "
+        "semanas pendientes en total. Se predecirá primero la más antigua "
+        f"({fila_seleccionada['fecha']}); las demás quedarán disponibles "
+        "para predecirse después, en su propio turno."
     )
 
-dias_transcurridos = (HOY - fecha_prediccion).days
-fecha_verificable = fecha_prediccion + timedelta(days=HORIZONTE_DIAS)
-
-if dias_transcurridos < 0:
-    st.warning(
-        f"🕐 Predicción futura. Disponible para verificación desde {fecha_verificable}."
+with st.expander("Ver features utilizadas", expanded=False):
+    st.dataframe(
+        fila_seleccionada[FEATURES].to_frame(name="valor"),
+        use_container_width=True,
     )
-    puede_verificar = False
-elif dias_transcurridos < HORIZONTE_DIAS:
-    faltan = HORIZONTE_DIAS - dias_transcurridos
-    st.warning(
-        f"⏳ Aún no disponible. Faltan {faltan} días para completar las 4 semanas."
-    )
-    puede_verificar = False
-else:
-    st.success("✅ Predicción habilitada para verificación.")
-    puede_verificar = True
 
-intervencion_actual = fila["intervencion_realizada"]
-verificado_actual = bool(fila["verificado"])
+if st.button("🔮 Generar predicción", type="primary"):
+    try:
+        probabilidad, riesgo_alto = predecir_fila(
+            modelo, encoders, umbral, fila_seleccionada
+        )
 
-st.markdown("### Estado actual")
-c1, c2, c3 = st.columns(3)
+        st.markdown("### Resultado")
+        c1, c2 = st.columns(2)
+        c1.metric("Probabilidad de riesgo alto", f"{probabilidad:.1%}")
+        c2.metric(
+            "Predicción",
+            "🔴 RIESGO ALTO" if riesgo_alto else "🟢 RIESGO BAJO",
+        )
+        st.caption(f"Umbral utilizado: {umbral:.1%}")
 
-with c1:
-    if pd.isna(intervencion_actual):
-        st.info("Intervención: no registrada")
-    elif bool(intervencion_actual):
-        st.success("Intervención: sí")
-    else:
-        st.write("Intervención: no")
+        guardado = guardar_prediccion(
+            fila_seleccionada, probabilidad, riesgo_alto, umbral, MODELO_NOMBRE
+        )
 
-with c2:
-    if verificado_actual:
-        st.success("Resultado: verificado")
-    else:
-        st.info("Resultado: pendiente")
+        if guardado:
+            st.success("✅ Predicción guardada en gold_ml.predicciones.")
+            st.cache_data.clear()
+        else:
+            st.warning(
+                "⚠️ Ya existía una predicción para este lote/fecha/"
+                "modelo — no se duplicó."
+            )
 
-with c3:
-    target_actual = fila["target_riesgo_alto_4sem_real"]
-    if pd.isna(target_actual):
-        st.info("Resultado real: pendiente")
-    elif bool(target_actual):
-        st.error("Resultado real: RIESGO ALTO")
-    else:
-        st.success("Resultado real: NO RIESGO ALTO")
+    except Exception as e:
+        st.error("❌ No se pudo generar o guardar la predicción.")
+        st.exception(e)
 
 st.divider()
 
-# ==============================================================
-# INTERVENCIÓN: FUERA DEL FORM PARA QUE APAREZCA INMEDIATAMENTE
-# ==============================================================
-st.markdown("## 1️⃣ Intervención")
+# ============================================================
+# PREDICCIÓN MASIVA: procesa TODO el backlog en orden, por lote
+# ============================================================
 
-opciones_intervencion = [
-    "No registrado todavía",
-    "Sí",
-    "No",
-]
-
-intervencion_actual = fila["intervencion_realizada"]
-opcion_actual = opcion_intervencion_actual(intervencion_actual)
-
-if "intervencion_ui" not in st.session_state:
-    st.session_state.intervencion_ui = opcion_actual
-
-opcion_intervencion = st.radio(
-    "¿Se realizó una intervención?",
-    opciones_intervencion,
-    index=opciones_intervencion.index(
-        st.session_state.intervencion_ui
-    ),
-    horizontal=True,
-    key=f"intervencion_{id_lote}_{fecha_prediccion}_{modelo}",
-)
-
-st.session_state.intervencion_ui = opcion_intervencion
-
-tipo_actual = (
-    "" if pd.isna(fila["tipo_intervencion"])
-    else str(fila["tipo_intervencion"])
-)
-
-resultado_actual = (
-    "" if pd.isna(fila["resultado_intervencion"])
-    else str(fila["resultado_intervencion"])
-)
-
-fecha_intervencion_actual = fecha_a_date(
-    fila["fecha_intervencion"]
-)
-
-# El recuadro aparece inmediatamente cuando se selecciona "Sí".
-if opcion_intervencion == "Sí":
-
-    st.markdown(
-        """
-        <div style="
-            background:#151923;
-            border:1px solid rgba(79,142,255,0.28);
-            border-left:4px solid #4f8eff;
-            border-radius:12px;
-            padding:1rem;
-            margin:0.5rem 0 1rem 0;">
-            <b style="color:white;">🩺 Datos de la intervención</b>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    tipo_intervencion = st.text_input(
-        "Tipo de intervención",
-        value=tipo_actual,
-        placeholder="Ej.: tratamiento veterinario, ajuste alimentario...",
-    )
-
-    fecha_intervencion = st.date_input(
-        "Fecha de intervención",
-        value=(
-            fecha_intervencion_actual
-            if fecha_intervencion_actual is not None
-            else HOY
-        ),
-    )
-
-    resultado_intervencion = st.text_area(
-        "Resultado de la intervención",
-        value=resultado_actual,
-        placeholder="Ej.: mejora, respuesta parcial, sin cambios...",
-    )
-
-else:
-    tipo_intervencion = ""
-    fecha_intervencion = None
-    resultado_intervencion = ""
-
-# ==============================================================
-# VERIFICACIÓN
-# ==============================================================
-st.markdown("## 2️⃣ Resultado de las próximas 4 semanas")
-
+st.subheader("⚡ Procesar todo el backlog pendiente")
 st.caption(
-    "Solo se habilita cuando han transcurrido 28 días desde la predicción."
+    "Recorre cada lote y predice, en orden, TODAS sus semanas "
+    "pendientes (de la más antigua a la más reciente), sin saltar "
+    "directamente a la última. No procesa semanas futuras."
 )
 
-if verificado_actual:
-
-    st.success("✅ Esta predicción ya está verificada.")
-
-    target_actual_bool = (
-        None
-        if pd.isna(fila["target_riesgo_alto_4sem_real"])
-        else bool(fila["target_riesgo_alto_4sem_real"])
-    )
-
-    resultado_default = (
-        "Hubo al menos un episodio de riesgo alto"
-        if target_actual_bool is True
-        else "No hubo ningún episodio de riesgo alto"
-    )
-
-    resultado_verificacion = st.radio(
-        "Resultado real de la ventana de 4 semanas",
-        [
-            "Hubo al menos un episodio de riesgo alto",
-            "No hubo ningún episodio de riesgo alto",
-        ],
-        index=[
-            "Hubo al menos un episodio de riesgo alto",
-            "No hubo ningún episodio de riesgo alto",
-        ].index(resultado_default),
-        horizontal=True,
-    )
-
-    confirmar_verificacion = True
-
-elif puede_verificar:
-
-    confirmar_verificacion = st.checkbox(
-        "Confirmar resultado real de las 4 semanas"
-    )
-
-    resultado_verificacion = st.radio(
-        "Resultado real",
-        [
-            "Hubo al menos un episodio de riesgo alto",
-            "No hubo ningún episodio de riesgo alto",
-        ],
-        horizontal=True,
-    )
-
-else:
-
-    confirmar_verificacion = False
-    resultado_verificacion = None
-    st.info("Todavía no está habilitada para verificación.")
-
-# ==============================================================
-# GUARDAR
-# ==============================================================
-guardar = st.button(
-    "💾 Guardar cambios",
-    use_container_width=True,
-    disabled=st.session_state.guardado_en_proceso,
-)
-
-
-if guardar:
-
-    # -----------------------------
-    # Intervención
-    # -----------------------------
-    if opcion_intervencion == "Sí":
-        intervencion_db = True
-
-        if not tipo_intervencion.strip():
-            st.error("❌ Indique el tipo de intervención.")
-            st.stop()
-
-        tipo_db = tipo_intervencion.strip()
-        fecha_db = fecha_intervencion
-        resultado_db = (
-            resultado_intervencion.strip()
-            if resultado_intervencion.strip()
-            else None
-        )
-
-    elif opcion_intervencion == "No":
-        intervencion_db = False
-        tipo_db = None
-        fecha_db = None
-        resultado_db = None
-
+if st.button("Ejecutar procesamiento masivo del backlog"):
+    if df_elegible_backlog.empty:
+        st.info("No hay semanas pendientes por procesar.")
     else:
-        # NULL = todavía no se conoce la intervención.
-        intervencion_db = None
-        tipo_db = (
-            None
-            if pd.isna(fila["tipo_intervencion"])
-            else fila["tipo_intervencion"]
-        )
-        fecha_db = (
-            None
-            if pd.isna(fila["fecha_intervencion"])
-            else fila["fecha_intervencion"]
-        )
-        resultado_db = (
-            None
-            if pd.isna(fila["resultado_intervencion"])
-            else fila["resultado_intervencion"]
-        )
+        # Se procesa en el orden natural (lote, fecha ASC) ya
+        # aplicado en la query -- así cada lote avanza semana por
+        # semana en el mismo recorrido.
+        df_orden = df_elegible_backlog.sort_values(["id_lote", "fecha"]).copy()
 
-    # -----------------------------
-    # Validar fecha intervención
-    # -----------------------------
-    if fecha_db is not None:
-        fecha_db_date = fecha_a_date(fecha_db)
+        progreso = st.progress(0.0)
+        resultados = []
+        total = len(df_orden)
 
-        if fecha_db_date is not None:
-            if fecha_db_date > HOY:
-                st.error(
-                    "❌ La fecha de intervención no puede ser futura."
+        for i, (_, fila) in enumerate(df_orden.iterrows(), start=1):
+            try:
+                probabilidad, riesgo_alto = predecir_fila(
+                    modelo, encoders, umbral, fila
                 )
-                st.stop()
-
-            if fecha_db_date < fecha_prediccion:
-                st.error(
-                    "❌ La fecha de intervención no puede ser anterior "
-                    "a la fecha de predicción."
+                guardado = guardar_prediccion(
+                    fila, probabilidad, riesgo_alto, umbral, MODELO_NOMBRE
                 )
-                st.stop()
+                resultados.append(
+                    {
+                        "id_lote": fila["id_lote"],
+                        "fecha": fila["fecha"],
+                        "probabilidad": probabilidad,
+                        "riesgo_alto": riesgo_alto,
+                        "guardado": guardado,
+                    }
+                )
+            except Exception as e:
+                resultados.append(
+                    {
+                        "id_lote": fila["id_lote"],
+                        "fecha": fila["fecha"],
+                        "error": str(e),
+                    }
+                )
 
-    # -----------------------------
-    # Verificación
-    # -----------------------------
-    if verificado_actual:
-        verificado_db = True
+            progreso.progress(i / total)
 
-        target_db = (
-            True
-            if resultado_verificacion == "Hubo al menos un episodio de riesgo alto"
-            else False
-        )
-
-    elif confirmar_verificacion:
-        if not puede_verificar:
-            st.error(
-                "❌ Todavía no han transcurrido las 4 semanas. "
-                "No se puede verificar."
-            )
-            st.stop()
-
-        verificado_db = True
-
-        target_db = (
-            True
-            if resultado_verificacion == "Hubo al menos un episodio de riesgo alto"
-            else False
-        )
-
-    else:
-        verificado_db = False
-
-        # Mientras no se confirme el desenlace real,
-        # el target permanece NULL.
-        target_db = None
-
-    try:
-        actualizar_prediccion(
-            id_lote=id_lote,
-            fecha_prediccion=fecha_prediccion,
-            modelo_utilizado=modelo,
-            intervencion_realizada=intervencion_db,
-            tipo_intervencion=tipo_db,
-            fecha_intervencion=fecha_db,
-            resultado_intervencion=resultado_db,
-            verificado=verificado_db,
-            target_real=target_db,
-        )
-
-        if verificado_db:
-            st.success(
-                "✅ Predicción verificada. "
-                "El registro ya cumple las condiciones para aparecer "
-                "en la vista de verificadas."
-            )
-        else:
-            st.success(
-                "✅ Seguimiento guardado. "
-                "La predicción continúa pendiente de verificación."
-            )
+        df_resultados = pd.DataFrame(resultados)
+        st.success(f"Proceso terminado: {len(df_resultados)} semanas procesadas.")
+        st.dataframe(df_resultados, use_container_width=True, hide_index=True)
 
         st.cache_data.clear()
-        st.rerun()
-
-    except Exception as e:
-        st.error("❌ No se pudo actualizar la predicción.")
-        st.exception(e)
