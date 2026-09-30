@@ -18,32 +18,28 @@ TIMEZONE_PERU = timezone(timedelta(hours=-5))
 HOY = datetime.now(TIMEZONE_PERU).date()
 
 # ------------------------------------------------------------------
-# REGLA: un mismo lote solo puede volver a predecirse cada 7 días.
+# CAMBIO DE ENFOQUE:
 #
-# La fuente de verdad es gold_ml.dataset_prediccion: cada lote
-# recibe una fila nueva de features cada 7 días (cadencia semanal).
-# Comparamos la fecha de features MÁS RECIENTE disponible para el
-# lote contra la fecha de la ÚLTIMA predicción ya guardada para ese
-# lote (con este modelo). Si la diferencia es menor a 7 días, no se
-# permite predecir de nuevo.
+# Antes, la app tomaba SIEMPRE la fila de features MÁS RECIENTE de
+# cada lote (MAX(fecha)). Esto tiene un problema serio: si un lote
+# tiene varias semanas de features ya cargadas pero todavía sin
+# predecir (por ejemplo, un backlog histórico), la app saltaba
+# directo a la última semana y las anteriores JAMÁS se predecían
+# -- perdiendo para siempre esos datos, que son justo los que
+# después alimentan el reentrenamiento vía verificación.
+#
+# Ahora, para cada lote, se busca la PRIMERA semana pendiente (la
+# más antigua que todavía no tenga una predicción con este modelo)
+# y se avanza en orden, una semana a la vez -- igual que ya vienen
+# espaciadas en gold_ml.dataset_prediccion (cada 7 días).
+#
+# La única restricción real que se mantiene es no predecir una
+# semana cuya fecha todavía no ha llegado (fecha > HOY): eso sí
+# seguiría siendo "predecir el futuro antes de tiempo".
 # ------------------------------------------------------------------
-DIAS_MINIMOS_ENTRE_PREDICCIONES = 7
 
 MODELO_NOMBRE = "random_forest_sin_lote29_v1"
 
-# ------------------------------------------------------------------
-# SUPABASE STORAGE
-#
-# Los .pkl están en el Storage de Supabase, dentro del bucket
-# "models" (ajustar BUCKET_NAME si el bucket real tiene otro
-# nombre).
-#
-# SUPABASE_URL y SUPABASE_KEY se importan de utils.database, que ya
-# apuntan al mismo proyecto que get_connection() (Proyecto A:
-# cuxppijddpiuaxwyswfb). No se definen credenciales nuevas aquí,
-# precisamente para evitar el problema de mezclar proyectos que
-# tuvimos antes.
-# ------------------------------------------------------------------
 BUCKET_NAME = "models"
 
 MODEL_FILE = "model.pkl"
@@ -61,10 +57,6 @@ def obtener_cliente_supabase():
 
 
 def descargar_pickle(cliente, nombre_archivo):
-    """
-    Descarga un archivo del bucket de Storage y lo deserializa
-    directamente en memoria (sin escribir a disco).
-    """
     contenido = cliente.storage.from_(BUCKET_NAME).download(nombre_archivo)
     return pickle.loads(contenido)
 
@@ -72,32 +64,37 @@ def descargar_pickle(cliente, nombre_archivo):
 @st.cache_resource
 def cargar_artefactos_modelo():
     cliente = obtener_cliente_supabase()
-
     modelo = descargar_pickle(cliente, MODEL_FILE)
     encoders = descargar_pickle(cliente, ENCODERS_FILE)
     umbral = descargar_pickle(cliente, THRESHOLD_FILE)
-
     return modelo, encoders, umbral
 
 
 # ============================================================
-# DATOS: última fila de features disponible por lote
+# DATOS: TODAS las semanas pendientes de predecir, por lote
 # ============================================================
 
 @st.cache_data(ttl=30)
-def cargar_ultimas_features():
+def cargar_features_pendientes(modelo_utilizado):
     """
-    Trae, para cada lote, únicamente la fila de features MÁS
-    RECIENTE en gold_ml.dataset_prediccion.
+    Trae TODAS las filas de gold_ml.dataset_prediccion que todavía
+    NO tienen una predicción guardada con este modelo (LEFT JOIN +
+    IS NULL), ordenadas por lote y fecha ASCENDENTE -- para poder
+    procesar el backlog respetando el orden cronológico real.
     """
     conn = get_connection()
     try:
         query = """
-            SELECT DISTINCT ON (id_lote) *
-            FROM gold_ml.dataset_prediccion
-            ORDER BY id_lote, fecha DESC;
+            SELECT dp.*
+            FROM gold_ml.dataset_prediccion dp
+            LEFT JOIN gold_ml.predicciones p
+                ON p.id_lote = dp.id_lote
+                AND p.fecha = dp.fecha
+                AND p.modelo_utilizado = %s
+            WHERE p.id IS NULL
+            ORDER BY dp.id_lote, dp.fecha ASC;
         """
-        return pd.read_sql(query, conn)
+        return pd.read_sql(query, conn, params=(modelo_utilizado,))
     finally:
         conn.close()
 
@@ -105,16 +102,14 @@ def cargar_ultimas_features():
 @st.cache_data(ttl=30)
 def cargar_ultima_prediccion_por_lote(modelo_utilizado):
     """
-    Trae, para cada lote, la fecha de features de la predicción
-    MÁS RECIENTE ya guardada con este modelo. Esto es lo que se usa
-    para calcular cuántos días faltan para poder volver a predecir.
+    Última fecha ya predicha por lote con este modelo -- se usa solo
+    como referencia informativa (para mostrar el "salto" real en
+    días entre la última predicción y la siguiente pendiente).
     """
     conn = get_connection()
     try:
         query = """
-            SELECT
-                id_lote,
-                MAX(fecha) AS ultima_fecha_predicha
+            SELECT id_lote, MAX(fecha) AS ultima_fecha_predicha
             FROM gold_ml.predicciones
             WHERE modelo_utilizado = %s
             GROUP BY id_lote;
@@ -232,9 +227,10 @@ def guardar_prediccion(fila, probabilidad, riesgo_alto, umbral, modelo_utilizado
 st.title("🔮 SIPREM-BOVINO")
 st.subheader("Generar nueva predicción")
 st.caption(
-    f"Un mismo lote solo puede volver a predecirse cuando hayan "
-    f"transcurrido al menos {DIAS_MINIMOS_ENTRE_PREDICCIONES} días "
-    "desde su última predicción."
+    "Cada lote se predice en orden cronológico: primero la semana "
+    "más antigua que aún no tenga predicción, respetando la "
+    "secuencia real de fechas del historial. No se predicen semanas "
+    "cuya fecha todavía no ha llegado."
 )
 
 try:
@@ -245,220 +241,220 @@ except Exception as e:
     st.stop()
 
 try:
-    df_ultimas_features = cargar_ultimas_features()
+    df_pendientes_todas = cargar_features_pendientes(MODELO_NOMBRE)
 except Exception as e:
-    st.error("❌ No se pudo leer gold_ml.dataset_prediccion.")
+    st.error("❌ No se pudo leer gold_ml.dataset_prediccion / gold_ml.predicciones.")
     st.exception(e)
     st.stop()
 
-if df_ultimas_features.empty:
-    st.warning("No hay datos de features en gold_ml.dataset_prediccion.")
+if df_pendientes_todas.empty:
+    st.success(
+        "✅ No hay semanas pendientes de predecir: todos los lotes "
+        "están al día con este modelo."
+    )
     st.stop()
 
-df_ultimas_features["fecha"] = pd.to_datetime(
-    df_ultimas_features["fecha"]
-).dt.date
+df_pendientes_todas["fecha"] = pd.to_datetime(df_pendientes_todas["fecha"]).dt.date
+
+# ------------------------------------------------------------------
+# Solo se consideran elegibles las semanas cuya fecha ya llegó
+# (fecha <= HOY). Las de fecha futura quedan en espera, pero no se
+# ocultan del backlog -- se muestran aparte para que quede claro
+# que existen pero todavía no corresponde predecirlas.
+# ------------------------------------------------------------------
+df_pendientes_todas["es_futura"] = df_pendientes_todas["fecha"] > HOY
 
 try:
     df_ultima_prediccion = cargar_ultima_prediccion_por_lote(MODELO_NOMBRE)
+    if not df_ultima_prediccion.empty:
+        df_ultima_prediccion["ultima_fecha_predicha"] = pd.to_datetime(
+            df_ultima_prediccion["ultima_fecha_predicha"]
+        ).dt.date
 except Exception as e:
-    st.warning("⚠️ No se pudo leer el historial de predicciones.")
+    st.warning("⚠️ No se pudo leer el historial de predicciones previas.")
     st.exception(e)
     df_ultima_prediccion = pd.DataFrame(columns=["id_lote", "ultima_fecha_predicha"])
 
-if not df_ultima_prediccion.empty:
-    df_ultima_prediccion["ultima_fecha_predicha"] = pd.to_datetime(
-        df_ultima_prediccion["ultima_fecha_predicha"]
-    ).dt.date
+# ------------------------------------------------------------------
+# La "siguiente semana a predecir" de cada lote es la más antigua
+# de su backlog pendiente (primera fila tras ordenar por fecha ASC).
+# ------------------------------------------------------------------
+df_elegible_backlog = df_pendientes_todas[~df_pendientes_todas["es_futura"]].copy()
 
-# ------------------------------------------------------------------
-# Unir última fila de features con la última fecha ya predicha
-# por lote, y calcular elegibilidad.
-# ------------------------------------------------------------------
-df = df_ultimas_features.merge(
-    df_ultima_prediccion,
-    on="id_lote",
-    how="left",
+df_siguiente = (
+    df_elegible_backlog.sort_values(["id_lote", "fecha"])
+    .groupby("id_lote", as_index=False)
+    .head(1)
+    .copy()
 )
 
-
-def calcular_estado(fila):
-    ultima_fecha = fila["ultima_fecha_predicha"]
-
-    if pd.isna(ultima_fecha):
-        return pd.Series(
-            {
-                "dias_desde_ultima_prediccion": None,
-                "puede_predecir": True,
-                "motivo": "Nunca predicho con este modelo",
-            }
-        )
-
-    dias = (fila["fecha"] - ultima_fecha).days
-
-    if dias >= DIAS_MINIMOS_ENTRE_PREDICCIONES:
-        return pd.Series(
-            {
-                "dias_desde_ultima_prediccion": dias,
-                "puede_predecir": True,
-                "motivo": f"Última predicción hace {dias} días",
-            }
-        )
-
-    faltan = DIAS_MINIMOS_ENTRE_PREDICCIONES - dias
-    return pd.Series(
-        {
-            "dias_desde_ultima_prediccion": dias,
-            "puede_predecir": False,
-            "motivo": f"Debe esperar {faltan} día(s) más",
-        }
-    )
+df_siguiente = df_siguiente.merge(df_ultima_prediccion, on="id_lote", how="left")
 
 
-df[["dias_desde_ultima_prediccion", "puede_predecir", "motivo"]] = df.apply(
-    calcular_estado, axis=1
+def calcular_info_orden(fila):
+    ultima = fila["ultima_fecha_predicha"]
+    if pd.isna(ultima):
+        return "Primera predicción de este lote"
+    dias = (fila["fecha"] - ultima).days
+    if dias == 7:
+        return "Continúa la secuencia semanal (7 días después)"
+    return f"⚠️ Salto de {dias} días desde la última predicción (revisar continuidad)"
+
+
+df_siguiente["info_orden"] = df_siguiente.apply(calcular_info_orden, axis=1)
+
+# Backlog restante por lote (cuántas semanas pendientes tiene en total,
+# incluyendo la que se predecirá ahora).
+backlog_por_lote = (
+    df_elegible_backlog.groupby("id_lote")
+    .size()
+    .rename("semanas_pendientes")
+    .reset_index()
 )
+df_siguiente = df_siguiente.merge(backlog_por_lote, on="id_lote", how="left")
 
 st.divider()
 
-total_lotes = len(df)
-elegibles = int(df["puede_predecir"].sum())
-bloqueados = total_lotes - elegibles
+total_lotes_con_backlog = df_siguiente["id_lote"].nunique()
+total_semanas_pendientes = len(df_elegible_backlog)
+total_futuras = int(df_pendientes_todas["es_futura"].sum())
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Total de lotes", total_lotes)
-c2.metric("Elegibles para predecir", elegibles)
-c3.metric("Bloqueados (< 7 días)", bloqueados)
+c1.metric("Lotes con backlog pendiente", total_lotes_con_backlog)
+c2.metric("Semanas pendientes (elegibles)", total_semanas_pendientes)
+c3.metric("Semanas futuras (aún no llegan)", total_futuras)
 
 st.divider()
 
 # ============================================================
-# TABLA DE ESTADO POR LOTE
+# TABLA: siguiente semana a predecir por lote
 # ============================================================
 
-st.subheader("📋 Estado de cada lote")
+st.subheader("📋 Siguiente semana pendiente por lote")
 
-tabla_estado = df[
-    ["id_lote", "distrito", "fecha", "ultima_fecha_predicha", "motivo", "puede_predecir"]
+tabla_estado = df_siguiente[
+    ["id_lote", "distrito", "fecha", "semanas_pendientes", "info_orden"]
 ].copy()
 
 tabla_estado.rename(
     columns={
         "id_lote": "Lote",
         "distrito": "Distrito",
-        "fecha": "Features disponibles (fecha)",
-        "ultima_fecha_predicha": "Última predicción",
-        "motivo": "Estado",
-        "puede_predecir": "Elegible",
+        "fecha": "Próxima semana a predecir",
+        "semanas_pendientes": "Semanas pendientes (total)",
+        "info_orden": "Continuidad",
     },
     inplace=True,
 )
 
-tabla_estado["Última predicción"] = tabla_estado["Última predicción"].apply(
-    lambda x: "Nunca" if pd.isna(x) else str(x)
-)
-
-tabla_estado["Elegible"] = tabla_estado["Elegible"].map({True: "✅", False: "⏳"})
-
 st.dataframe(tabla_estado, use_container_width=True, hide_index=True)
 
-st.divider()
-
-# ============================================================
-# PREDICCIÓN INDIVIDUAL
-# ============================================================
-
-st.subheader("🐄 Predecir un lote")
-
-df_elegibles = df[df["puede_predecir"]]
-
-if df_elegibles.empty:
-    st.info(
-        f"Ningún lote es elegible todavía. Todos deben esperar al menos "
-        f"{DIAS_MINIMOS_ENTRE_PREDICCIONES} días desde su última predicción."
-    )
-else:
-    opciones = [
-        (
-            f"{fila['id_lote']} | features del {fila['fecha']} | {fila['motivo']}",
-            idx,
-        )
-        for idx, fila in df_elegibles.iterrows()
-    ]
-
-    seleccion = st.selectbox(
-        "Seleccione un lote elegible",
-        opciones,
-        format_func=lambda x: x[0],
-    )
-
-    _, idx_seleccionado = seleccion
-    fila_seleccionada = df_elegibles.loc[idx_seleccionado]
-
-    with st.expander("Ver features utilizadas", expanded=False):
-        st.dataframe(
-            fila_seleccionada[FEATURES].to_frame(name="valor"),
-            use_container_width=True,
-        )
-
-    if st.button("🔮 Generar predicción", type="primary"):
-        try:
-            probabilidad, riesgo_alto = predecir_fila(
-                modelo, encoders, umbral, fila_seleccionada
-            )
-
-            st.markdown("### Resultado")
-            c1, c2 = st.columns(2)
-            c1.metric("Probabilidad de riesgo alto", f"{probabilidad:.1%}")
-            c2.metric(
-                "Predicción",
-                "🔴 RIESGO ALTO" if riesgo_alto else "🟢 RIESGO BAJO",
-            )
-            st.caption(f"Umbral utilizado: {umbral:.1%}")
-
-            guardado = guardar_prediccion(
-                fila_seleccionada,
-                probabilidad,
-                riesgo_alto,
-                umbral,
-                MODELO_NOMBRE,
-            )
-
-            if guardado:
-                st.success("✅ Predicción guardada en gold_ml.predicciones.")
-                st.cache_data.clear()
-            else:
-                st.warning(
-                    "⚠️ Ya existía una predicción para este lote/fecha/"
-                    "modelo — no se duplicó."
-                )
-
-        except Exception as e:
-            st.error("❌ No se pudo generar o guardar la predicción.")
-            st.exception(e)
+if total_futuras > 0:
+    with st.expander(f"Ver {total_futuras} semana(s) futura(s) aún no elegibles"):
+        tabla_futuras = df_pendientes_todas[df_pendientes_todas["es_futura"]][
+            ["id_lote", "distrito", "fecha"]
+        ].sort_values(["id_lote", "fecha"])
+        st.dataframe(tabla_futuras, use_container_width=True, hide_index=True)
 
 st.divider()
 
 # ============================================================
-# PREDICCIÓN MASIVA (todos los elegibles de una vez)
+# PREDICCIÓN INDIVIDUAL (siempre la siguiente en orden del lote)
 # ============================================================
 
-st.subheader("⚡ Predecir todos los lotes elegibles")
-st.caption(
-    "Genera y guarda predicciones para todos los lotes que ya "
-    f"cumplieron los {DIAS_MINIMOS_ENTRE_PREDICCIONES} días desde "
-    "su última predicción."
+st.subheader("🐄 Predecir un lote (siguiente semana en orden)")
+
+opciones = [
+    (
+        f"{fila['id_lote']} | siguiente: {fila['fecha']} | "
+        f"{fila['semanas_pendientes']} semana(s) pendiente(s) | {fila['info_orden']}",
+        idx,
+    )
+    for idx, fila in df_siguiente.iterrows()
+]
+
+seleccion = st.selectbox(
+    "Seleccione un lote",
+    opciones,
+    format_func=lambda x: x[0],
 )
 
-if st.button("Ejecutar predicción masiva"):
-    if df_elegibles.empty:
-        st.info("No hay lotes elegibles en este momento.")
+_, idx_seleccionado = seleccion
+fila_seleccionada = df_siguiente.loc[idx_seleccionado]
+
+if fila_seleccionada["semanas_pendientes"] > 1:
+    st.info(
+        f"ℹ️ Este lote tiene {int(fila_seleccionada['semanas_pendientes'])} "
+        "semanas pendientes en total. Se predecirá primero la más antigua "
+        f"({fila_seleccionada['fecha']}); las demás quedarán disponibles "
+        "para predecirse después, en su propio turno."
+    )
+
+with st.expander("Ver features utilizadas", expanded=False):
+    st.dataframe(
+        fila_seleccionada[FEATURES].to_frame(name="valor"),
+        use_container_width=True,
+    )
+
+if st.button("🔮 Generar predicción", type="primary"):
+    try:
+        probabilidad, riesgo_alto = predecir_fila(
+            modelo, encoders, umbral, fila_seleccionada
+        )
+
+        st.markdown("### Resultado")
+        c1, c2 = st.columns(2)
+        c1.metric("Probabilidad de riesgo alto", f"{probabilidad:.1%}")
+        c2.metric(
+            "Predicción",
+            "🔴 RIESGO ALTO" if riesgo_alto else "🟢 RIESGO BAJO",
+        )
+        st.caption(f"Umbral utilizado: {umbral:.1%}")
+
+        guardado = guardar_prediccion(
+            fila_seleccionada, probabilidad, riesgo_alto, umbral, MODELO_NOMBRE
+        )
+
+        if guardado:
+            st.success("✅ Predicción guardada en gold_ml.predicciones.")
+            st.cache_data.clear()
+        else:
+            st.warning(
+                "⚠️ Ya existía una predicción para este lote/fecha/"
+                "modelo — no se duplicó."
+            )
+
+    except Exception as e:
+        st.error("❌ No se pudo generar o guardar la predicción.")
+        st.exception(e)
+
+st.divider()
+
+# ============================================================
+# PREDICCIÓN MASIVA: procesa TODO el backlog en orden, por lote
+# ============================================================
+
+st.subheader("⚡ Procesar todo el backlog pendiente")
+st.caption(
+    "Recorre cada lote y predice, en orden, TODAS sus semanas "
+    "pendientes (de la más antigua a la más reciente), sin saltar "
+    "directamente a la última. No procesa semanas futuras."
+)
+
+if st.button("Ejecutar procesamiento masivo del backlog"):
+    if df_elegible_backlog.empty:
+        st.info("No hay semanas pendientes por procesar.")
     else:
+        # Se procesa en el orden natural (lote, fecha ASC) ya
+        # aplicado en la query -- así cada lote avanza semana por
+        # semana en el mismo recorrido.
+        df_orden = df_elegible_backlog.sort_values(["id_lote", "fecha"]).copy()
+
         progreso = st.progress(0.0)
         resultados = []
-        total = len(df_elegibles)
+        total = len(df_orden)
 
-        for i, (_, fila) in enumerate(df_elegibles.iterrows(), start=1):
+        for i, (_, fila) in enumerate(df_orden.iterrows(), start=1):
             try:
                 probabilidad, riesgo_alto = predecir_fila(
                     modelo, encoders, umbral, fila
@@ -487,7 +483,7 @@ if st.button("Ejecutar predicción masiva"):
             progreso.progress(i / total)
 
         df_resultados = pd.DataFrame(resultados)
-        st.success(f"Proceso terminado: {len(df_resultados)} lotes procesados.")
+        st.success(f"Proceso terminado: {len(df_resultados)} semanas procesadas.")
         st.dataframe(df_resultados, use_container_width=True, hide_index=True)
 
         st.cache_data.clear()
