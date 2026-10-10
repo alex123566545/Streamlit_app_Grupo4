@@ -51,6 +51,12 @@ st.markdown("""
         background-color: var(--sidebar);
         border-right: 1px solid var(--border);
     }
+    /* Solo los nombres de las páginas del menú */
+    section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a,
+    section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span {
+    color: #FFFFFF !important;
+    }
+
 
     section[data-testid="stSidebar"] > div {
         background-color: var(--sidebar);
