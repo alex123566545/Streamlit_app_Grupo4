@@ -212,6 +212,41 @@ header[data-testid="stHeader"] {
     background-color: #171411 !important;
 }
 
+/* Texto del selector: siempre negro, incluso sin pasar el mouse */
+input[aria-label="Seleccione la predicción"],
+input[aria-label="Seleccione la predicción"]:hover,
+input[aria-label="Seleccione la predicción"]:focus,
+input[aria-label="Seleccione la predicción"]:active,
+.st-emotion-cache-zfrvrb.e1fp86qc1 {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    background-color: #FFFFFF !important;
+    opacity: 1 !important;
+}
+
+/* Texto interno del selector y valor seleccionado */
+div[data-baseweb="select"] input,
+div[data-baseweb="select"] input:hover,
+div[data-baseweb="select"] input:focus {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    caret-color: #000000 !important;
+    opacity: 1 !important;
+}
+
+/* Texto del valor visible dentro del selector */
+div[data-baseweb="select"] [role="combobox"] {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+}
+
+/* Placeholder siempre oscuro */
+input[aria-label="Seleccione la predicción"]::placeholder {
+    color: #333333 !important;
+    -webkit-text-fill-color: #333333 !important;
+    opacity: 1 !important;
+}
+
     </style>
     """,
     unsafe_allow_html=True,
