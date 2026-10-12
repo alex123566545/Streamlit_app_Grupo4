@@ -191,26 +191,25 @@ st.markdown(
             }
         }
         
-/* Eliminar fondos blancos en elementos dentro del contenido principal */
-.stApp,
-[data-testid="stAppViewContainer"],
-[data-testid="stMain"],
-[data-testid="stMainBlockContainer"] {
+/* Header superior de Streamlit */
+header[data-testid="stHeader"] {
     background-color: #171411 !important;
 }
 
-/* Fondo oscuro para contenedores y tarjetas */
-[data-testid="stVerticalBlockBorderWrapper"],
-[data-testid="stExpander"],
-[data-testid="stPopover"] {
-    background-color: #282019 !important;
-    border-color: #403329 !important;
+/* Barra de herramientas del header */
+header[data-testid="stHeader"] [data-testid="stToolbar"] {
+    background-color: #171411 !important;
 }
 
-/* Evitar que los elementos con esa clase muestren fondo blanco */
-.st-emotion-cache-1j22a0y.e149qiiz4 {
-    background-color: #282019 !important;
-    color: #FFFFFF !important;
+/* Eliminar el efecto blanco translúcido */
+header[data-testid="stHeader"] {
+    background-image: none !important;
+    box-shadow: none !important;
+}
+
+/* Fondo de la zona superior principal */
+[data-testid="stAppViewContainer"] {
+    background-color: #171411 !important;
 }
 
     </style>
