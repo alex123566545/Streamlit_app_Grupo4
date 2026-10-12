@@ -212,6 +212,41 @@ header[data-testid="stHeader"] {
     background-color: #171411 !important;
 }
 
+/* Campo de búsqueda del selector de predicciones */
+.st-emotion-cache-zfrvrb.e1fp86qc1,
+input[aria-label="Seleccione la predicción"] {
+    background-color: #FFFFFF !important;
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    caret-color: #000000 !important;
+    border: 1px solid #A8794E !important;
+}
+
+/* Texto escrito y valor seleccionado */
+input[aria-label="Seleccione la predicción"]::placeholder {
+    color: #333333 !important;
+    -webkit-text-fill-color: #333333 !important;
+    opacity: 1 !important;
+}
+
+/* Opciones del menú desplegable */
+[role="listbox"] {
+    background-color: #FFFFFF !important;
+    color: #000000 !important;
+}
+
+[role="option"] {
+    background-color: #FFFFFF !important;
+    color: #000000 !important;
+}
+
+/* Opción resaltada al pasar el cursor o navegar */
+[role="option"][data-focused="true"],
+[role="option"]:hover {
+    background-color: #E8DED3 !important;
+    color: #000000 !important;
+}
+
     </style>
     """,
     unsafe_allow_html=True,
