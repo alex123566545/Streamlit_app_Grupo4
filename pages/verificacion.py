@@ -247,6 +247,59 @@ input[aria-label="Seleccione la predicción"]::placeholder {
     opacity: 1 !important;
 }
 
+/* COMBOBOX: fondo negro y texto blanco siempre */
+input[aria-label="Seleccione la predicción"],
+input[aria-label="Seleccione la predicción"]:hover,
+input[aria-label="Seleccione la predicción"]:focus,
+input[aria-label="Seleccione la predicción"]:active,
+div[data-baseweb="select"] input {
+    background-color: #000000 !important;
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    caret-color: #FFFFFF !important;
+    opacity: 1 !important;
+    border-color: #403329 !important;
+}
+
+/* Contenedor del selector */
+div[data-baseweb="select"] > div {
+    background-color: #000000 !important;
+    color: #FFFFFF !important;
+    border-color: #403329 !important;
+}
+
+/* Valor seleccionado */
+div[data-baseweb="select"] [role="combobox"],
+div[data-baseweb="select"] [role="combobox"] * {
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}
+
+/* Menú desplegable */
+[role="listbox"],
+[role="listbox"] *,
+[role="option"] {
+    background-color: #000000 !important;
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}
+
+/* Opción al pasar el mouse o al resaltarla */
+[role="option"]:hover,
+[role="option"][data-focused="true"],
+[role="option"][aria-selected="true"] {
+    background-color: #282019 !important;
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}
+
+/* Placeholder */
+input[aria-label="Seleccione la predicción"]::placeholder {
+    color: #D0C5BA !important;
+    -webkit-text-fill-color: #D0C5BA !important;
+    opacity: 1 !important;
+}
+
     </style>
     """,
     unsafe_allow_html=True,
