@@ -96,7 +96,7 @@ except Exception as exc:
 
 
 # ============================================================
-# VALIDACIÓN Y PREPARACIÓN
+# VALIDACIÓN DE LAS TABLAS
 # ============================================================
 
 for df in (historico, predicciones):
@@ -129,12 +129,8 @@ predicciones["_prioridad"] = 1
 
 
 # ============================================================
-# UNIFICACIÓN DEL HISTÓRICO Y LAS PREDICCIONES
+# UNIFICAR HISTÓRICO Y PREDICCIONES
 # ============================================================
-
-# Se admiten columnas diferentes entre ambas fuentes.
-# Cuando coinciden lote y fecha, prevalece la predicción operativa.
-# Si hay varias versiones de una predicción, se prioriza la más reciente.
 
 datos = pd.concat(
     [historico, predicciones],
@@ -179,7 +175,7 @@ if not lotes:
 
 
 # ============================================================
-# NUEVA SECCIÓN: EVOLUCIÓN GENERAL DE TODOS LOS LOTES
+# VISTA GENERAL: TODOS LOS LOTES
 # ============================================================
 
 st.divider()
@@ -187,70 +183,146 @@ st.divider()
 st.header("📊 Evolución general de todos los lotes")
 
 st.caption(
-    "Compara simultáneamente el riesgo de mortalidad y las variables "
-    "históricas de todos los lotes registrados."
+    "Compara los cambios semanales de los lotes durante un periodo "
+    "determinado. Puedes visualizar todos los lotes o seleccionar "
+    "únicamente aquellos que deseas analizar."
 )
 
 
 # ------------------------------------------------------------
-# FILTROS GENERALES
+# SELECTORES GENERALES DE LOTES Y FECHAS
 # ------------------------------------------------------------
 
-col_global_1, col_global_2 = st.columns(2)
+col_modo, col_lotes = st.columns([1, 2])
 
-with col_global_1:
+with col_modo:
 
-    lotes_seleccionados = st.multiselect(
-        "Lotes que desea visualizar",
-        options=lotes,
-        default=lotes,
-        key="lotes_evolucion_general"
-    )
-
-with col_global_2:
-
-    tipo_evolucion = st.selectbox(
-        "Indicador de riesgo",
+    modo_lotes = st.selectbox(
+        "¿Qué lotes deseas visualizar?",
         options=[
-            "Probabilidad predicha (%)",
-            "Target histórico (0/100)",
-            "Resultado verificado (0/100)"
+            "Todos los lotes",
+            "Seleccionar lotes"
         ],
-        key="indicador_riesgo_general"
+        index=0,
+        key="modo_lotes_general"
     )
 
 
-df_todos = datos[
+with col_lotes:
+
+    if modo_lotes == "Todos los lotes":
+
+        lotes_seleccionados = lotes
+
+        st.multiselect(
+            "Lotes incluidos",
+            options=lotes,
+            default=lotes,
+            disabled=True,
+            key="lotes_todos_general"
+        )
+
+    else:
+
+        lotes_seleccionados = st.multiselect(
+            "Selecciona los lotes que deseas comparar",
+            options=lotes,
+            default=lotes[:min(3, len(lotes))],
+            key="lotes_seleccionados_general"
+        )
+
+
+# Rango de fechas disponible en los datos seleccionados.
+datos_fechas = datos[
     datos["id_lote"].isin(lotes_seleccionados)
 ].copy()
 
 
-if df_todos.empty:
+if not datos_fechas.empty:
 
-    st.info(
-        "Seleccione al menos un lote para visualizar su evolución."
-    )
+    fecha_min_general = datos_fechas["fecha"].min().date()
+    fecha_max_general = datos_fechas["fecha"].max().date()
+
+    col_fecha_inicio, col_fecha_fin = st.columns(2)
+
+    with col_fecha_inicio:
+
+        fecha_inicio_general = st.date_input(
+            "Fecha de inicio",
+            value=fecha_min_general,
+            min_value=fecha_min_general,
+            max_value=fecha_max_general,
+            key="fecha_inicio_general"
+        )
+
+    with col_fecha_fin:
+
+        fecha_fin_general = st.date_input(
+            "Fecha de fin",
+            value=fecha_max_general,
+            min_value=fecha_min_general,
+            max_value=fecha_max_general,
+            key="fecha_fin_general"
+        )
+
+    if fecha_inicio_general > fecha_fin_general:
+
+        st.warning(
+            "La fecha de inicio no puede ser posterior a la fecha de fin."
+        )
+        st.stop()
+
+    df_todos = datos_fechas[
+        (datos_fechas["fecha"].dt.date >= fecha_inicio_general)
+        & (datos_fechas["fecha"].dt.date <= fecha_fin_general)
+    ].copy()
 
 else:
 
-    # --------------------------------------------------------
-    # 1. EVOLUCIÓN DEL RIESGO DE TODOS LOS LOTES
-    # --------------------------------------------------------
+    df_todos = pd.DataFrame()
 
-    st.subheader("1. Riesgo de mortalidad por lote")
+    st.info(
+        "Selecciona al menos un lote para consultar su evolución."
+    )
 
-    mapa_riesgo = {
-        "Probabilidad predicha (%)":
+
+if not df_todos.empty:
+
+    st.caption(
+        f"Lotes seleccionados: {df_todos['id_lote'].nunique()} | "
+        f"Fechas disponibles: {df_todos['fecha'].nunique()} | "
+        f"Registros: {len(df_todos)}"
+    )
+
+    # ========================================================
+    # 1. COMPARAR EL RIESGO ENTRE LOTES
+    # ========================================================
+
+    st.subheader("1. Comparación del riesgo de mortalidad")
+
+    st.write(
+        "Elige qué dato de riesgo quieres observar en el gráfico."
+    )
+
+    opciones_riesgo = {
+        "Probabilidad estimada por el modelo (%)":
             "probabilidad_riesgo_predicha",
 
-        "Target histórico (0/100)":
+        "Riesgo histórico (0 o 100)":
             "target_riesgo_alto_4sem",
 
-        "Resultado verificado (0/100)":
+        "Resultado verificado (0 o 100)":
             "target_riesgo_alto_4sem_real"
     }
 
-    columna_riesgo = mapa_riesgo[tipo_evolucion]
+    indicador_seleccionado = st.selectbox(
+        "Dato de riesgo que deseas visualizar",
+        options=list(opciones_riesgo.keys()),
+        index=0,
+        key="indicador_riesgo_general"
+    )
+
+    columna_riesgo = opciones_riesgo[indicador_seleccionado]
 
     if columna_riesgo in df_todos.columns:
 
@@ -263,13 +335,11 @@ else:
             errors="coerce"
         )
 
-        # Convertir a porcentaje para facilitar la comparación.
+        # Transformar los valores a una escala de 0 a 100.
         grafico_riesgo["valor"] = (
             grafico_riesgo[columna_riesgo] * 100
         )
 
-        # Una columna y una línea por lote.
-        # No se promedian los resultados de diferentes lotes.
         grafico_riesgo = grafico_riesgo.pivot_table(
             index="fecha",
             columns="id_lote",
@@ -285,31 +355,47 @@ else:
                 x_label="Fecha"
             )
 
-            st.caption(
-                "Cada línea representa un lote. La probabilidad predicha "
-                "muestra la estimación del modelo. En los targets, "
-                "0 significa negativo y 100 positivo."
-            )
+            if columna_riesgo == "probabilidad_riesgo_predicha":
+
+                st.caption(
+                    "Cada línea representa un lote. Un valor del 75 % "
+                    "indica que el modelo asignó una probabilidad "
+                    "estimada del 75 % a ese registro."
+                )
+
+            else:
+
+                st.caption(
+                    "0 = resultado negativo y 100 = resultado positivo. "
+                    "Estos valores son etiquetas, no tasas de mortalidad."
+                )
 
         else:
 
             st.info(
-                "No existen valores disponibles para este indicador."
+                "No hay valores disponibles para graficar este indicador."
             )
 
     else:
 
         st.info(
-            f"La columna {columna_riesgo} no está disponible "
-            "en los datos cargados."
+            f"La columna '{columna_riesgo}' no existe "
+            "en los datos disponibles."
         )
 
 
-    # --------------------------------------------------------
-    # 2. EVOLUCIÓN DE VARIABLES ENTRE TODOS LOS LOTES
-    # --------------------------------------------------------
+    # ========================================================
+    # 2. COMPARAR LAS VARIABLES ENTRE LOTES
+    # ========================================================
+
+    st.divider()
 
     st.subheader("2. Evolución de las variables por lote")
+
+    st.caption(
+        "Selecciona las variables que quieres comparar. "
+        "Cada gráfico mostrará una línea por lote."
+    )
 
     variables_generales = [
         c
@@ -324,7 +410,7 @@ else:
     if variables_generales:
 
         variables_elegidas = st.multiselect(
-            "Variables que desea comparar",
+            "Variables que deseas comparar",
             options=variables_generales,
             default=[
                 c
@@ -370,19 +456,21 @@ else:
 
         else:
 
-            st.info("Seleccione al menos una variable.")
+            st.info("Selecciona al menos una variable.")
 
     else:
 
         st.info(
             "No se encontraron variables numéricas conocidas "
-            "en las columnas disponibles."
+            "en los datos seleccionados."
         )
 
 
-    # --------------------------------------------------------
-    # 3. ÚLTIMO REGISTRO DISPONIBLE DE CADA LOTE
-    # --------------------------------------------------------
+    # ========================================================
+    # 3. TABLA DEL ÚLTIMO REGISTRO DE CADA LOTE
+    # ========================================================
+
+    st.divider()
 
     st.subheader("3. Último registro disponible por lote")
 
@@ -414,9 +502,10 @@ else:
             hide_index=True
         )
 
-    # --------------------------------------------------------
-    # 4. DESCARGA DE TODOS LOS LOTES SELECCIONADOS
-    # --------------------------------------------------------
+
+    # ========================================================
+    # 4. DESCARGAR DATOS GENERALES
+    # ========================================================
 
     csv_general = (
         df_todos
@@ -426,7 +515,7 @@ else:
     )
 
     st.download_button(
-        "📥 Descargar datos de todos los lotes (CSV)",
+        "📥 Descargar datos de los lotes seleccionados (CSV)",
         data=csv_general,
         file_name="evolucion_todos_lotes.csv",
         mime="text/csv",
@@ -434,13 +523,26 @@ else:
     )
 
 
+else:
+
+    st.info(
+        "No hay registros para los lotes y el periodo seleccionados."
+    )
+
+
 # ============================================================
-# ANÁLISIS INDIVIDUAL: SE CONSERVA EL CÓDIGO ORIGINAL
+# ANÁLISIS INDIVIDUAL DE UN LOTE
 # ============================================================
 
 st.divider()
 
 st.header("🔎 Análisis individual de un lote")
+
+st.caption(
+    "Selecciona un lote específico para estudiar sus predicciones, "
+    "resultados verificados y variables históricas."
+)
+
 
 col1, col2 = st.columns([1, 2])
 
@@ -448,7 +550,7 @@ with col1:
 
     lote = st.selectbox(
         "Seleccione el lote",
-        lotes,
+        options=lotes,
         key="lote_individual"
     )
 
@@ -464,7 +566,7 @@ fecha_max = df_lote_completo["fecha"].max().date()
 with col2:
 
     rango = st.date_input(
-        "Periodo",
+        "Periodo del lote",
         value=(fecha_min, fecha_max),
         min_value=fecha_min,
         max_value=fecha_max,
@@ -493,9 +595,9 @@ if df_lote.empty:
     st.stop()
 
 
-# ------------------------------------------------------------
-# MÉTRICAS DEL LOTE
-# ------------------------------------------------------------
+# ============================================================
+# MÉTRICAS DEL LOTE INDIVIDUAL
+# ============================================================
 
 n_fechas = df_lote["fecha"].nunique()
 
@@ -516,9 +618,9 @@ m2.metric("Predicciones registradas", n_pred)
 m3.metric("Predicciones verificadas", n_verif)
 
 
-# ------------------------------------------------------------
-# 1. EVOLUCIÓN DEL RIESGO DEL LOTE
-# ------------------------------------------------------------
+# ============================================================
+# 1. RIESGO DE MORTALIDAD DEL LOTE INDIVIDUAL
+# ============================================================
 
 st.divider()
 
@@ -597,9 +699,9 @@ else:
     st.info("No hay columnas de riesgo disponibles para graficar.")
 
 
-# ------------------------------------------------------------
-# TABLA DE PREDICCIONES Y RESULTADOS DEL LOTE
-# ------------------------------------------------------------
+# ============================================================
+# TABLA DE PREDICCIONES Y RESULTADOS
+# ============================================================
 
 cols = [
     c
@@ -639,9 +741,9 @@ if cols:
     )
 
 
-# ------------------------------------------------------------
-# 2. EVOLUCIÓN DE LAS VARIABLES DEL LOTE
-# ------------------------------------------------------------
+# ============================================================
+# 2. VARIABLES DEL LOTE INDIVIDUAL
+# ============================================================
 
 st.divider()
 
@@ -722,9 +824,9 @@ else:
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # 3. CONTEXTO DEL LOTE
-# ------------------------------------------------------------
+# ============================================================
 
 st.divider()
 
@@ -757,6 +859,7 @@ if contexto:
         valor = ultima[c]
 
         if pd.isna(valor):
+
             texto = "Sin dato"
 
         elif isinstance(valor, (bool, np.bool_)):
@@ -773,9 +876,9 @@ if contexto:
             st.write(texto)
 
 
-# ------------------------------------------------------------
+# ============================================================
 # DESCARGA DE DATOS DEL LOTE INDIVIDUAL
-# ------------------------------------------------------------
+# ============================================================
 
 csv = (
     df_lote
@@ -794,9 +897,9 @@ st.download_button(
 )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # ACLARACIÓN SOBRE LA MORTALIDAD
-# ------------------------------------------------------------
+# ============================================================
 
 with st.expander(
     "Importante: riesgo no equivale a mortalidad observada"
