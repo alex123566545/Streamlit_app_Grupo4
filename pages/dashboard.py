@@ -1,3 +1,99 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+from utils.database import get_connection
+
+st.set_page_config(page_title="SIPREM-BOVINO | Evolución por lote", page_icon="🐄", layout="wide")
+st.title("🐄 Evolución histórica por lote")
+st.caption("Explore los cambios semanales de cada lote y contraste el riesgo histórico con las predicciones y los resultados verificados.")
+
+# Ubicación sugerida: pages/5_Evolucion_lotes.py
+VARIABLES = {
+    "tamano_lote_cabezas": "Tamaño del lote (cabezas)",
+    "cobertura_vacunacion_pct": "Cobertura de vacunación (%)",
+    "dias_desde_desparasitacion": "Días desde desparasitación",
+    "animales_nuevos_30d": "Animales nuevos (30 días)",
+    "visitas_tecnicas_mes": "Visitas técnicas del mes",
+    "casos_respiratorios": "Casos respiratorios",
+    "casos_diarreicos": "Casos diarreicos",
+    "temperatura_min_c": "Temperatura mínima (°C)",
+    "temperatura_media_c": "Temperatura media (°C)",
+    "temperatura_max_c": "Temperatura máxima (°C)",
+    "humedad_relativa_pct": "Humedad relativa (%)",
+    "precipitacion_semanal_mm": "Precipitación semanal (mm)",
+    "condicion_pastura_indice": "Condición de pastura",
+    "indice_ndvi_satelital": "Índice NDVI satelital",
+    "consumo_ms_kg_animal_dia": "Consumo de materia seca (kg/animal/día)",
+    "agua_l_animal_dia": "Consumo de agua (L/animal/día)",
+    "actividad_sensor_indice": "Actividad del sensor",
+    "condicion_corporal_prom": "Condición corporal promedio",
+    "precio_leche_local_s_kg": "Precio local de leche (S/kg)",
+    "altitud_msnm": "Altitud (msnm)",
+    "distancia_centro_veterinario_km": "Distancia al centro veterinario (km)",
+    "media_movil_3s_pastura": "Media móvil 3 semanas: pastura",
+    "media_movil_3s_condicion_corporal": "Media móvil 3 semanas: condición corporal",
+    "media_movil_3s_temperatura": "Media móvil 3 semanas: temperatura",
+    "media_movil_4s_pastura": "Media móvil 4 semanas: pastura",
+    "media_movil_4s_condicion_corporal": "Media móvil 4 semanas: condición corporal",
+    "media_movil_4s_temperatura": "Media móvil 4 semanas: temperatura",
+}
+
+@st.cache_data(ttl=60)
+def cargar_tablas():
+    conn = get_connection()
+    try:
+        historico = pd.read_sql_query(
+            "SELECT * FROM gold_ml.dataset_features ORDER BY id_lote, fecha;", conn
+        )
+        predicciones = pd.read_sql_query(
+            "SELECT * FROM gold_ml.predicciones ORDER BY id_lote, fecha;", conn
+        )
+        return historico, predicciones
+    finally:
+        conn.close()
+
+try:
+    historico, predicciones = cargar_tablas()
+except Exception as exc:
+    st.error("No se pudieron leer gold_ml.dataset_features y gold_ml.predicciones. Revise la conexión y los permisos.")
+    st.exception(exc)
+    st.stop()
+
+for df in (historico, predicciones):
+    if not {"id_lote", "fecha"}.issubset(df.columns):
+        st.error("Ambas tablas deben contener las columnas id_lote y fecha.")
+        st.stop()
+    df["id_lote"] = df["id_lote"].astype(str)
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df.dropna(subset=["fecha"], inplace=True)
+
+if historico.empty and predicciones.empty:
+    st.info("Todavía no hay registros para mostrar.")
+    st.stop()
+
+historico = historico.copy()
+predicciones = predicciones.copy()
+historico["_origen"] = "Histórico de entrenamiento"
+predicciones["_origen"] = "Predicción operativa"
+historico["_prioridad"] = 0
+predicciones["_prioridad"] = 1
+
+# Unifica las fuentes sin asumir que tienen exactamente las mismas columnas.
+# Si hay histórico y predicción para el mismo lote/fecha, prevalece la fotografía
+# almacenada con la predicción. Si hay varias versiones, se prioriza la más reciente.
+datos = pd.concat([historico, predicciones], ignore_index=True, sort=False)
+if "predicho_en" in datos.columns:
+    datos["predicho_en"] = pd.to_datetime(datos["predicho_en"], errors="coerce")
+    datos = datos.sort_values(["id_lote", "fecha", "_prioridad", "predicho_en"], na_position="first")
+else:
+    datos = datos.sort_values(["id_lote", "fecha", "_prioridad"])
+datos = datos.drop_duplicates(["id_lote", "fecha"], keep="last").sort_values(["id_lote", "fecha"])
+
+lotes = sorted(datos["id_lote"].dropna().unique().tolist())
+if not lotes:
+    st.info("No se encontraron lotes válidos.")
+    st.stop()
+
 col1, col2 = st.columns([1, 2])
 with col1:
     lote = st.selectbox("Seleccione el lote", lotes)
