@@ -16,7 +16,7 @@ st.set_page_config(
 # ==============================================================
 st.markdown(
     """
-    <style>
+     <style>
         :root {
             --bg: #171411;
             --sidebar: #201A16;
@@ -31,7 +31,7 @@ st.markdown(
         .stApp,
         [data-testid="stAppViewContainer"],
         [data-testid="stMain"] {
-            background-color: var(--bg);
+            background-color: var(--bg) !important;
             color: var(--text);
         }
 
@@ -41,24 +41,39 @@ st.markdown(
             padding-bottom: 3rem;
         }
 
-        /* Solo los nombres de las páginas del menú lateral */
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a,
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span {
-            color: #FFFFFF !important;
+        /* Header superior de Streamlit */
+        header[data-testid="stHeader"],
+        header[data-testid="stHeader"] [data-testid="stToolbar"] {
+            background-color: var(--bg) !important;
+            background-image: none !important;
+            box-shadow: none !important;
         }
 
+        /* Menú lateral */
         section[data-testid="stSidebar"] {
             background-color: var(--sidebar);
             border-right: 1px solid var(--border);
         }
 
-        h1, h2, h3, h4 {
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span {
+            color: #FFFFFF !important;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
             color: #FFFFFF !important;
             letter-spacing: -0.35px;
         }
 
-        p, .stMarkdown, .stCaption {
+        p, .stMarkdown, .stCaption,
+        [data-testid="stCaptionContainer"] {
             color: var(--muted);
+        }
+
+        label,
+        [data-testid="stCheckbox"] label,
+        [data-testid="stRadio"] label {
+            color: #FFFFFF !important;
         }
 
         /* Tarjetas de métricas */
@@ -82,22 +97,34 @@ st.markdown(
         }
 
         /* Tablas */
-        [data-testid="stDataFrame"] {
+        [data-testid="stDataFrame"],
+        [data-testid="stTable"] {
             border: 1px solid var(--border);
             border-radius: 10px;
             overflow: hidden;
         }
 
-        /* Campos de entrada */
+        /* Campos de entrada generales */
         .stSelectbox div[data-baseweb="select"] > div,
         .stTextInput input,
         .stTextArea textarea,
         .stDateInput input,
-        [data-baseweb="input"] {
+        [data-baseweb="input"] > div,
+        [data-baseweb="textarea"] > div {
             background-color: var(--card) !important;
             color: #FFFFFF !important;
             border-color: var(--border) !important;
             border-radius: 8px;
+        }
+
+        .stTextInput input,
+        .stTextArea textarea,
+        .stDateInput input,
+        [data-baseweb="input"] input,
+        [data-baseweb="textarea"] textarea {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            caret-color: #FFFFFF !important;
         }
 
         /* Opciones desplegables */
@@ -106,15 +133,62 @@ st.markdown(
         [role="listbox"] *,
         [role="option"] {
             color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
 
-        .stRadio label,
-        .stCheckbox label {
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        [role="listbox"],
+        [role="option"] {
+            background-color: #000000 !important;
+        }
+
+        [role="option"]:hover,
+        [role="option"][data-focused="true"],
+        [role="option"][aria-selected="true"] {
+            background-color: var(--card) !important;
             color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
 
-        /* Botones */
-        .stButton > button {
+        /* Selector de predicción: fondo negro y texto blanco */
+        input[aria-label="Seleccione la predicción"],
+        input[aria-label="Seleccione la predicción"]:hover,
+        input[aria-label="Seleccione la predicción"]:focus,
+        input[aria-label="Seleccione la predicción"]:active,
+        div[data-baseweb="select"] input {
+            background-color: #000000 !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            caret-color: #FFFFFF !important;
+            opacity: 1 !important;
+            border-color: var(--border) !important;
+        }
+
+        div[data-baseweb="select"] > div {
+            background-color: #000000 !important;
+            color: #FFFFFF !important;
+            border-color: var(--border) !important;
+        }
+
+        div[data-baseweb="select"] [role="combobox"],
+        div[data-baseweb="select"] [role="combobox"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        input[aria-label="Seleccione la predicción"]::placeholder,
+        input::placeholder,
+        textarea::placeholder {
+            color: var(--muted) !important;
+            -webkit-text-fill-color: var(--muted) !important;
+            opacity: 1 !important;
+        }
+
+        /* Botones marrones */
+        .stButton > button,
+        .stFormSubmitButton > button,
+        [data-testid="stDownloadButton"] > button {
             background-color: var(--brown);
             color: #FFFFFF !important;
             border: 1px solid var(--brown);
@@ -124,16 +198,32 @@ st.markdown(
             transition: all 0.2s ease;
         }
 
-        .stButton > button:hover {
+        .stButton > button:hover,
+        .stFormSubmitButton > button:hover,
+        [data-testid="stDownloadButton"] > button:hover {
             background-color: var(--brown-light);
             border-color: var(--brown-light);
             color: #171411 !important;
         }
 
-        .stButton > button:disabled {
+        .stButton > button:disabled,
+        .stFormSubmitButton > button:disabled,
+        [data-testid="stDownloadButton"] > button:disabled {
             background-color: #514438;
             color: #BDB1A5 !important;
             border-color: #514438;
+        }
+
+        /* Formularios y paneles */
+        [data-testid="stForm"],
+        [data-testid="stExpander"] {
+            background-color: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        [data-testid="stExpander"] summary {
+            color: #FFFFFF !important;
         }
 
         hr {
@@ -144,18 +234,18 @@ st.markdown(
             border-radius: 10px;
         }
 
-        /* Encabezado principal */
+        /* Encabezado principal, si se usa en la página */
         .siprem-hero {
             background: linear-gradient(135deg, #302319, #211A15);
-            border: 1px solid #403329;
-            border-left: 4px solid #A8794E;
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--brown);
             border-radius: 15px;
             padding: 28px 32px;
             margin-bottom: 24px;
         }
 
         .siprem-eyebrow {
-            color: #C49A70;
+            color: var(--brown-light);
             font-size: 12px;
             font-weight: 800;
             letter-spacing: 2px;
@@ -171,7 +261,7 @@ st.markdown(
         }
 
         .siprem-hero-text {
-            color: #D0C5BA;
+            color: var(--muted);
             font-size: 15px;
             line-height: 1.7;
             margin: 0;
@@ -190,116 +280,6 @@ st.markdown(
                 font-size: 26px;
             }
         }
-        
-/* Header superior de Streamlit */
-header[data-testid="stHeader"] {
-    background-color: #171411 !important;
-}
-
-/* Barra de herramientas del header */
-header[data-testid="stHeader"] [data-testid="stToolbar"] {
-    background-color: #171411 !important;
-}
-
-/* Eliminar el efecto blanco translúcido */
-header[data-testid="stHeader"] {
-    background-image: none !important;
-    box-shadow: none !important;
-}
-
-/* Fondo de la zona superior principal */
-[data-testid="stAppViewContainer"] {
-    background-color: #171411 !important;
-}
-
-/* Texto del selector: siempre negro, incluso sin pasar el mouse */
-input[aria-label="Seleccione la predicción"],
-input[aria-label="Seleccione la predicción"]:hover,
-input[aria-label="Seleccione la predicción"]:focus,
-input[aria-label="Seleccione la predicción"]:active,
-.st-emotion-cache-zfrvrb.e1fp86qc1 {
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
-    background-color: #FFFFFF !important;
-    opacity: 1 !important;
-}
-
-/* Texto interno del selector y valor seleccionado */
-div[data-baseweb="select"] input,
-div[data-baseweb="select"] input:hover,
-div[data-baseweb="select"] input:focus {
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
-    caret-color: #000000 !important;
-    opacity: 1 !important;
-}
-
-/* Texto del valor visible dentro del selector */
-div[data-baseweb="select"] [role="combobox"] {
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
-}
-
-/* Placeholder siempre oscuro */
-input[aria-label="Seleccione la predicción"]::placeholder {
-    color: #333333 !important;
-    -webkit-text-fill-color: #333333 !important;
-    opacity: 1 !important;
-}
-
-/* COMBOBOX: fondo negro y texto blanco siempre */
-input[aria-label="Seleccione la predicción"],
-input[aria-label="Seleccione la predicción"]:hover,
-input[aria-label="Seleccione la predicción"]:focus,
-input[aria-label="Seleccione la predicción"]:active,
-div[data-baseweb="select"] input {
-    background-color: #000000 !important;
-    color: #FFFFFF !important;
-    -webkit-text-fill-color: #FFFFFF !important;
-    caret-color: #FFFFFF !important;
-    opacity: 1 !important;
-    border-color: #403329 !important;
-}
-
-/* Contenedor del selector */
-div[data-baseweb="select"] > div {
-    background-color: #000000 !important;
-    color: #FFFFFF !important;
-    border-color: #403329 !important;
-}
-
-/* Valor seleccionado */
-div[data-baseweb="select"] [role="combobox"],
-div[data-baseweb="select"] [role="combobox"] * {
-    color: #FFFFFF !important;
-    -webkit-text-fill-color: #FFFFFF !important;
-}
-
-/* Menú desplegable */
-[role="listbox"],
-[role="listbox"] *,
-[role="option"] {
-    background-color: #000000 !important;
-    color: #FFFFFF !important;
-    -webkit-text-fill-color: #FFFFFF !important;
-}
-
-/* Opción al pasar el mouse o al resaltarla */
-[role="option"]:hover,
-[role="option"][data-focused="true"],
-[role="option"][aria-selected="true"] {
-    background-color: #282019 !important;
-    color: #FFFFFF !important;
-    -webkit-text-fill-color: #FFFFFF !important;
-}
-
-/* Placeholder */
-input[aria-label="Seleccione la predicción"]::placeholder {
-    color: #D0C5BA !important;
-    -webkit-text-fill-color: #D0C5BA !important;
-    opacity: 1 !important;
-}
-
     </style>
     """,
     unsafe_allow_html=True,
