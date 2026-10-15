@@ -1,5 +1,5 @@
-
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import date, datetime, timedelta, timezone
 
@@ -340,6 +340,69 @@ def es_zona_gris(
     return (umbral - probabilidad) < margen
 
 
+def cerrar_combos_y_subir():
+    """
+    Cierra los combo box (selectbox) que hayan quedado abiertos,
+    quita el foco del elemento activo y lleva la vista al inicio de la
+    página para que la alerta de guardado sea visible.
+
+    Se ejecuta con un iframe de altura 0 que accede al documento
+    principal de Streamlit.
+    """
+    components.html(
+        """
+        <script>
+            const doc = window.parent.document;
+
+            function cerrarCombos() {
+                const activo = doc.activeElement || doc.body;
+
+                // 1. Simular la tecla Escape para cerrar listas desplegables.
+                ["keydown", "keyup"].forEach(function (tipo) {
+                    activo.dispatchEvent(
+                        new KeyboardEvent(tipo, {
+                            key: "Escape",
+                            code: "Escape",
+                            keyCode: 27,
+                            which: 27,
+                            bubbles: true,
+                            cancelable: true,
+                        })
+                    );
+                });
+
+                // 2. Quitar el foco del elemento activo.
+                if (doc.activeElement && doc.activeElement.blur) {
+                    doc.activeElement.blur();
+                }
+
+                // 3. Volver al inicio para ver la alerta.
+                const contenedores = [
+                    doc.querySelector('[data-testid="stMain"]'),
+                    doc.querySelector('section.main'),
+                    doc.querySelector('[data-testid="stAppViewContainer"]'),
+                ];
+
+                contenedores.forEach(function (c) {
+                    if (c && c.scrollTo) {
+                        c.scrollTo({ top: 0, behavior: "smooth" });
+                    }
+                });
+
+                window.parent.scrollTo({ top: 0, behavior: "smooth" });
+            }
+
+            // Se repite porque Streamlit termina de dibujar los widgets
+            // unos milisegundos después de ejecutar el script.
+            setTimeout(cerrarCombos, 50);
+            setTimeout(cerrarCombos, 300);
+            setTimeout(cerrarCombos, 800);
+        </script>
+        """,
+        height=0,
+    )
+
+
 # ==============================================================
 # CARGAR PREDICCIONES
 # ==============================================================
@@ -475,20 +538,31 @@ st.markdown(
 # ==============================================================
 # La alerta se guarda en session_state antes del rerun para que
 # siga visible después de actualizar los datos.
+#
+# Además de la alerta fija en la parte superior, se muestra un toast
+# flotante (visible aunque el usuario esté al final de la página) y se
+# cierran los combo box que hayan quedado abiertos.
 if "alerta_guardado" in st.session_state:
     alerta = st.session_state.pop("alerta_guardado")
 
     if alerta["tipo"] == "success":
         st.success(alerta["mensaje"], icon="✅")
+        st.toast(alerta["mensaje"], icon="✅")
 
     elif alerta["tipo"] == "warning":
         st.warning(alerta["mensaje"], icon="⚠️")
+        st.toast(alerta["mensaje"], icon="⚠️")
 
     elif alerta["tipo"] == "error":
         st.error(alerta["mensaje"], icon="❌")
+        st.toast(alerta["mensaje"], icon="❌")
 
     else:
         st.info(alerta["mensaje"])
+        st.toast(alerta["mensaje"], icon="ℹ️")
+
+if st.session_state.pop("cerrar_combos", False):
+    cerrar_combos_y_subir()
 
 
 # ==============================================================
@@ -1400,6 +1474,10 @@ if guardar:
                     "La predicción continúa pendiente de verificación."
                 ),
             }
+
+        # Pedir que, tras recargar, se cierren los combo box abiertos
+        # y la vista suba al inicio para mostrar la alerta.
+        st.session_state["cerrar_combos"] = True
 
         # Invalidar el caché y recargar. La alerta se mostrará
         # al inicio de la siguiente ejecución.
