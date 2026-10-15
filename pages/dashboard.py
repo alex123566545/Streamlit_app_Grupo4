@@ -3,17 +3,226 @@ import pandas as pd
 import numpy as np
 from utils.database import get_connection
 
+
+# ============================================================
+# CONFIGURACIÓN DE LA PÁGINA
+# ============================================================
+
 st.set_page_config(
     page_title="SIPREM-BOVINO | Evolución por lote",
     page_icon="🐄",
     layout="wide"
 )
 
-st.title("🐄 Evolución histórica por lote")
-st.caption(
-    "Explore los cambios semanales de cada lote y contraste el riesgo "
-    "histórico con las predicciones y los resultados verificados."
+
+# ============================================================
+# ESTILO VISUAL: SIPREM-BOVINO
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+        :root {
+            --bg: #171411;
+            --sidebar: #201A16;
+            --card: #282019;
+            --brown: #A8794E;
+            --brown-light: #C49A70;
+            --text: #FFFFFF;
+            --muted: #D0C5BA;
+            --border: #403329;
+        }
+
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"] {
+            background-color: var(--bg) !important;
+            color: var(--text) !important;
+        }
+
+        .block-container {
+            max-width: 1500px;
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+
+        header[data-testid="stHeader"] {
+            background-color: var(--bg) !important;
+            background-image: none !important;
+            box-shadow: none !important;
+        }
+
+        section[data-testid="stSidebar"] {
+            background-color: var(--sidebar) !important;
+            border-right: 1px solid var(--border);
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span {
+            color: #FFFFFF !important;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            color: #FFFFFF !important;
+            letter-spacing: -0.35px;
+        }
+
+        p, .stCaption, [data-testid="stCaptionContainer"] {
+            color: var(--muted);
+        }
+
+        label,
+        [data-testid="stCheckbox"] label,
+        [data-testid="stRadio"] label {
+            color: #FFFFFF !important;
+        }
+
+        /* Tarjetas de métricas */
+        [data-testid="stMetric"] {
+            background: var(--card) !important;
+            border: 1px solid var(--border);
+            border-radius: 13px;
+            padding: 16px;
+        }
+
+        [data-testid="stMetricLabel"] {
+            color: var(--muted) !important;
+        }
+
+        [data-testid="stMetricValue"] {
+            color: var(--brown-light) !important;
+        }
+
+        [data-testid="stMetricDelta"] {
+            color: var(--muted) !important;
+        }
+
+        /* Controles y selectores */
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stMultiSelect div[data-baseweb="select"] > div,
+        .stTextInput input,
+        .stTextArea textarea,
+        .stDateInput input,
+        [data-baseweb="input"] > div {
+            background-color: #000000 !important;
+            color: #FFFFFF !important;
+            border-color: var(--border) !important;
+            border-radius: 8px;
+        }
+
+        .stTextInput input,
+        .stTextArea textarea,
+        .stDateInput input,
+        [data-baseweb="input"] input {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            caret-color: #FFFFFF !important;
+        }
+
+        /* Opciones desplegables */
+        [data-baseweb="select"] *,
+        [data-baseweb="popover"] *,
+        [role="listbox"] *,
+        [role="option"] {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        [role="listbox"],
+        [role="option"] {
+            background-color: #000000 !important;
+        }
+
+        [role="option"]:hover,
+        [role="option"][aria-selected="true"],
+        [role="option"][data-focused="true"] {
+            background-color: var(--card) !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        input::placeholder,
+        textarea::placeholder {
+            color: var(--muted) !important;
+            -webkit-text-fill-color: var(--muted) !important;
+            opacity: 1 !important;
+        }
+
+        /* Botones */
+        .stButton > button,
+        .stDownloadButton > button {
+            background-color: var(--brown) !important;
+            color: #FFFFFF !important;
+            border: 1px solid var(--brown);
+            border-radius: 9px;
+            font-weight: 650;
+            min-height: 42px;
+            transition: all 0.2s ease;
+        }
+
+        .stButton > button:hover,
+        .stDownloadButton > button:hover {
+            background-color: var(--brown-light) !important;
+            border-color: var(--brown-light) !important;
+            color: #171411 !important;
+        }
+
+        .stButton > button:disabled,
+        .stDownloadButton > button:disabled {
+            background-color: #514438 !important;
+            color: #BDB1A5 !important;
+            border-color: #514438 !important;
+        }
+
+        /* Paneles y tablas */
+        [data-testid="stDataFrame"],
+        [data-testid="stTable"],
+        [data-testid="stForm"],
+        [data-testid="stExpander"] {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+
+        [data-testid="stExpander"] {
+            background-color: var(--card) !important;
+        }
+
+        [data-testid="stExpander"] summary {
+            color: #FFFFFF !important;
+        }
+
+        hr {
+            border-color: var(--border) !important;
+        }
+
+        [data-testid="stAlert"] {
+            border-radius: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .block-container {
+                padding: 1.2rem 1rem 2rem 1rem;
+            }
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
+
+
+# ============================================================
+# ENCABEZADO
+# ============================================================
+
+st.title("🐄 Evolución histórica por lote")
+
+st.caption(
+    "Explore los cambios semanales de cada lote y contraste "
+    "el riesgo histórico con las predicciones y los resultados verificados."
+)
+
 
 # ============================================================
 # CONFIGURACIÓN DE VARIABLES
@@ -189,9 +398,9 @@ st.caption(
 )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # SELECTORES GENERALES DE LOTES Y FECHAS
-# ------------------------------------------------------------
+# ============================================================
 
 col_modo, col_lotes = st.columns([1, 2])
 
@@ -232,7 +441,10 @@ with col_lotes:
         )
 
 
-# Rango de fechas disponible en los datos seleccionados.
+# ============================================================
+# FILTRAR POR FECHAS
+# ============================================================
+
 datos_fechas = datos[
     datos["id_lote"].isin(lotes_seleccionados)
 ].copy()
@@ -266,7 +478,6 @@ if not datos_fechas.empty:
         )
 
     if fecha_inicio_general > fecha_fin_general:
-
         st.warning(
             "La fecha de inicio no puede ser posterior a la fecha de fin."
         )
@@ -286,6 +497,10 @@ else:
     )
 
 
+# ============================================================
+# GRÁFICOS GENERALES
+# ============================================================
+
 if not df_todos.empty:
 
     st.caption(
@@ -295,34 +510,17 @@ if not df_todos.empty:
     )
 
     # ========================================================
-    # 1. COMPARAR EL RIESGO ENTRE LOTES
+    # 1. RIESGO HISTÓRICO ENTRE LOTES
     # ========================================================
 
     st.subheader("1. Comparación del riesgo de mortalidad")
 
     st.write(
-        "Elige qué dato de riesgo quieres observar en el gráfico."
+        "Se muestra únicamente el riesgo histórico de cada lote. "
+        "El valor 0 indica un resultado negativo y 100 un resultado positivo."
     )
 
-    opciones_riesgo = {
-        "Probabilidad estimada por el modelo (%)":
-            "probabilidad_riesgo_predicha",
-
-        "Riesgo histórico (0 o 100)":
-            "target_riesgo_alto_4sem",
-
-        "Resultado verificado (0 o 100)":
-            "target_riesgo_alto_4sem_real"
-    }
-
-    indicador_seleccionado = st.selectbox(
-        "Dato de riesgo que deseas visualizar",
-        options=list(opciones_riesgo.keys()),
-        index=0,
-        key="indicador_riesgo_general"
-    )
-
-    columna_riesgo = opciones_riesgo[indicador_seleccionado]
+    columna_riesgo = "target_riesgo_alto_4sem"
 
     if columna_riesgo in df_todos.columns:
 
@@ -335,7 +533,7 @@ if not df_todos.empty:
             errors="coerce"
         )
 
-        # Transformar los valores a una escala de 0 a 100.
+        # Llevar las etiquetas 0/1 a una escala de 0/100.
         grafico_riesgo["valor"] = (
             grafico_riesgo[columna_riesgo] * 100
         )
@@ -347,33 +545,26 @@ if not df_todos.empty:
             aggfunc="last"
         ).sort_index()
 
-        if not grafico_riesgo.empty:
+        if not grafico_riesgo.dropna(how="all").empty:
 
             st.line_chart(
                 grafico_riesgo,
-                y_label="Porcentaje (%)",
+                y_label="Riesgo histórico (0–100)",
                 x_label="Fecha"
             )
 
-            if columna_riesgo == "probabilidad_riesgo_predicha":
-
-                st.caption(
-                    "Cada línea representa un lote. Un valor del 75 % "
-                    "indica que el modelo asignó una probabilidad "
-                    "estimada del 75 % a ese registro."
-                )
-
-            else:
-
-                st.caption(
-                    "0 = resultado negativo y 100 = resultado positivo. "
-                    "Estos valores son etiquetas, no tasas de mortalidad."
-                )
+            st.caption(
+                "Cada línea representa un lote. "
+                "0 = no hubo episodio de riesgo alto; "
+                "100 = sí hubo un episodio de riesgo alto. "
+                "Estos valores son etiquetas, no tasas de mortalidad."
+            )
 
         else:
 
             st.info(
-                "No hay valores disponibles para graficar este indicador."
+                "No hay etiquetas históricas disponibles para "
+                "graficar en las fechas seleccionadas."
             )
 
     else:
@@ -385,7 +576,7 @@ if not df_todos.empty:
 
 
     # ========================================================
-    # 2. COMPARAR LAS VARIABLES ENTRE LOTES
+    # 2. EVOLUCIÓN DE VARIABLES ENTRE LOTES
     # ========================================================
 
     st.divider()
@@ -448,11 +639,20 @@ if not df_todos.empty:
                     aggfunc="last"
                 ).sort_index()
 
-                st.line_chart(
-                    grafico_variable,
-                    y_label=VARIABLES[variable],
-                    x_label="Fecha"
-                )
+                if not grafico_variable.dropna(how="all").empty:
+
+                    st.line_chart(
+                        grafico_variable,
+                        y_label=VARIABLES[variable],
+                        x_label="Fecha"
+                    )
+
+                else:
+
+                    st.info(
+                        f"No hay valores disponibles para "
+                        f"{VARIABLES[variable]} en este periodo."
+                    )
 
         else:
 
@@ -467,44 +667,7 @@ if not df_todos.empty:
 
 
     # ========================================================
-    # 3. TABLA DEL ÚLTIMO REGISTRO DE CADA LOTE
-    # ========================================================
-
-    st.divider()
-
-    st.subheader("3. Último registro disponible por lote")
-
-    columnas_resumen = [
-        c
-        for c in [
-            "id_lote",
-            "fecha",
-            "probabilidad_riesgo_predicha",
-            "riesgo_alto_predicho",
-            "target_riesgo_alto_4sem",
-            "verificado",
-            "target_riesgo_alto_4sem_real"
-        ]
-        if c in df_todos.columns
-    ]
-
-    if columnas_resumen:
-
-        resumen = (
-            df_todos
-            .sort_values("fecha")
-            .drop_duplicates("id_lote", keep="last")
-        )
-
-        st.dataframe(
-            resumen[columnas_resumen].sort_values("id_lote"),
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-    # ========================================================
-    # 4. DESCARGAR DATOS GENERALES
+    # DESCARGAR DATOS GENERALES
     # ========================================================
 
     csv_general = (
@@ -605,11 +768,26 @@ n_pred = int(
     (df_lote["_origen"] == "Predicción operativa").sum()
 )
 
-n_verif = (
-    int(df_lote["verificado"].fillna(False).astype(bool).sum())
-    if "verificado" in df_lote.columns
-    else 0
-)
+if "verificado" in df_lote.columns:
+
+    verificado = df_lote["verificado"]
+
+    if verificado.dtype == object:
+        verificado = (
+            verificado.astype(str)
+            .str.strip()
+            .str.lower()
+            .isin(["true", "1", "t", "sí", "si"])
+        )
+    else:
+        verificado = verificado.fillna(False).astype(bool)
+
+    n_verif = int(verificado.sum())
+
+else:
+
+    n_verif = 0
+
 
 m1, m2, m3 = st.columns(3)
 
@@ -678,10 +856,7 @@ if "umbral_utilizado" in df_lote.columns:
     )
 
 
-if (
-    len(riesgo.columns)
-    and not riesgo.dropna(how="all").empty
-):
+if len(riesgo.columns) and not riesgo.dropna(how="all").empty:
 
     st.line_chart(
         riesgo,
@@ -700,7 +875,7 @@ else:
 
 
 # ============================================================
-# TABLA DE PREDICCIONES Y RESULTADOS
+# TABLA DE PREDICCIONES Y RESULTADOS DEL LOTE
 # ============================================================
 
 cols = [
@@ -825,59 +1000,7 @@ else:
 
 
 # ============================================================
-# 3. CONTEXTO DEL LOTE
-# ============================================================
-
-st.divider()
-
-st.subheader("3. Contexto del lote")
-
-
-contexto = [
-    c
-    for c in [
-        "distrito",
-        "categoria_zootecnica",
-        "raza_predominante",
-        "lote_sensorizado",
-        "uso_registro_digital",
-        "distancia_centro_veterinario_km",
-        "altitud_msnm"
-    ]
-    if c in df_lote.columns
-]
-
-
-if contexto:
-
-    ultima = df_lote.iloc[-1]
-
-    columnas = st.columns(3)
-
-    for i, c in enumerate(contexto):
-
-        valor = ultima[c]
-
-        if pd.isna(valor):
-
-            texto = "Sin dato"
-
-        elif isinstance(valor, (bool, np.bool_)):
-
-            texto = "Sí" if valor else "No"
-
-        else:
-
-            texto = str(valor)
-
-        with columnas[i % 3]:
-
-            st.write(f"**{c.replace('_', ' ').title()}**")
-            st.write(texto)
-
-
-# ============================================================
-# DESCARGA DE DATOS DEL LOTE INDIVIDUAL
+# DESCARGAR DATOS DEL LOTE INDIVIDUAL
 # ============================================================
 
 csv = (
@@ -890,9 +1013,9 @@ csv = (
 
 st.download_button(
     "📥 Descargar datos de este lote (CSV)",
-    csv,
-    f"evolucion_{lote}.csv",
-    "text/csv",
+    data=csv,
+    file_name=f"evolucion_{lote}.csv",
+    mime="text/csv",
     key="descargar_lote_individual"
 )
 
@@ -914,446 +1037,3 @@ with st.expander(
         "variable explícita con animales muertos y, para una tasa, "
         "el número de animales expuestos."
     )
-"""
- <style>
-        :root {
-            --bg: #171411;
-            --sidebar: #201A16;
-            --card: #282019;
-            --brown: #A8794E;
-            --brown-light: #C49A70;
-            --text: #FFFFFF;
-            --muted: #D0C5BA;
-            --border: #403329;
-        }
-
-        .stApp,
-        [data-testid="stAppViewContainer"],
-        [data-testid="stMain"] {
-            background-color: var(--bg) !important;
-            color: var(--text);
-        }
-
-        .block-container {
-            max-width: 1500px;
-            padding-top: 2rem;
-            padding-bottom: 3rem;
-        }
-
-        /* Header superior de Streamlit */
-        header[data-testid="stHeader"],
-        header[data-testid="stHeader"] [data-testid="stToolbar"] {
-            background-color: var(--bg) !important;
-            background-image: none !important;
-            box-shadow: none !important;
-        }
-
-        /* Menú lateral */
-        section[data-testid="stSidebar"] {
-            background-color: var(--sidebar);
-            border-right: 1px solid var(--border);
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a,
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span {
-            color: #FFFFFF !important;
-        }
-
-        h1, h2, h3, h4, h5, h6 {
-            color: #FFFFFF !important;
-            letter-spacing: -0.35px;
-        }
-
-        p, .stMarkdown, .stCaption,
-        [data-testid="stCaptionContainer"] {
-            color: var(--muted);
-        }
-
-        label,
-        [data-testid="stCheckbox"] label,
-        [data-testid="stRadio"] label {
-            color: #FFFFFF !important;
-        }
-
-        /* Tarjetas de métricas */
-        [data-testid="stMetric"] {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 13px;
-            padding: 16px;
-        }
-
-        [data-testid="stMetricLabel"] {
-            color: var(--muted) !important;
-        }
-
-        [data-testid="stMetricValue"] {
-            color: var(--brown-light) !important;
-        }
-
-        [data-testid="stMetricDelta"] {
-            color: var(--muted) !important;
-        }
-
-        /* Tablas */
-        [data-testid="stDataFrame"],
-        [data-testid="stTable"] {
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            overflow: hidden;
-        }
-
-        /* Campos de entrada generales */
-        .stSelectbox div[data-baseweb="select"] > div,
-        .stTextInput input,
-        .stTextArea textarea,
-        .stDateInput input,
-        [data-baseweb="input"] > div,
-        [data-baseweb="textarea"] > div {
-            background-color: var(--card) !important;
-            color: #FFFFFF !important;
-            border-color: var(--border) !important;
-            border-radius: 8px;
-        }
-
-        .stTextInput input,
-        .stTextArea textarea,
-        .stDateInput input,
-        [data-baseweb="input"] input,
-        [data-baseweb="textarea"] textarea {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            caret-color: #FFFFFF !important;
-        }
-
-        /* Opciones desplegables */
-        [data-baseweb="select"] *,
-        [data-baseweb="popover"] *,
-        [role="listbox"] *,
-        [role="option"] {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        [data-baseweb="popover"],
-        [data-baseweb="menu"],
-        [role="listbox"],
-        [role="option"] {
-            background-color: #000000 !important;
-        }
-
-        [role="option"]:hover,
-        [role="option"][data-focused="true"],
-        [role="option"][aria-selected="true"] {
-            background-color: var(--card) !important;
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        /* Selector de predicción: fondo negro y texto blanco */
-        input[aria-label="Seleccione la predicción"],
-        input[aria-label="Seleccione la predicción"]:hover,
-        input[aria-label="Seleccione la predicción"]:focus,
-        input[aria-label="Seleccione la predicción"]:active,
-        div[data-baseweb="select"] input {
-            background-color: #000000 !important;
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-            caret-color: #FFFFFF !important;
-            opacity: 1 !important;
-            border-color: var(--border) !important;
-        }
-
-        div[data-baseweb="select"] > div {
-            background-color: #000000 !important;
-            color: #FFFFFF !important;
-            border-color: var(--border) !important;
-        }
-
-        div[data-baseweb="select"] [role="combobox"],
-        div[data-baseweb="select"] [role="combobox"] * {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        input[aria-label="Seleccione la predicción"]::placeholder,
-        input::placeholder,
-        textarea::placeholder {
-            color: var(--muted) !important;
-            -webkit-text-fill-color: var(--muted) !important;
-            opacity: 1 !important;
-        }
-
-        /* Botones marrones */
-        .stButton > button,
-        .stFormSubmitButton > button,
-        [data-testid="stDownloadButton"] > button {
-            background-color: var(--brown);
-            color: #FFFFFF !important;
-            border: 1px solid var(--brown);
-            border-radius: 9px;
-            font-weight: 650;
-            min-height: 42px;
-            transition: all 0.2s ease;
-        }
-
-        .stButton > button:hover,
-        .stFormSubmitButton > button:hover,
-        [data-testid="stDownloadButton"] > button:hover {
-            background-color: var(--brown-light);
-            border-color: var(--brown-light);
-            color: #171411 !important;
-        }
-
-        .stButton > button:disabled,
-        .stFormSubmitButton > button:disabled,
-        [data-testid="stDownloadButton"] > button:disabled {
-            background-color: #514438;
-            color: #BDB1A5 !important;
-            border-color: #514438;
-        }
-
-        /* Formularios y paneles */
-        [data-testid="stForm"],
-        [data-testid="stExpander"] {
-            background-color: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-        }
-
-        [data-testid="stExpander"] summary {
-            color: #FFFFFF !important;
-        }
-
-        hr {
-            border-color: var(--border) !important;
-        }
-
-        [data-testid="stAlert"] {
-            border-radius: 10px;
-        }
-
-        /* Encabezado principal, si se usa en la página */
-        .siprem-hero {
-            background: linear-gradient(135deg, #302319, #211A15);
-            border: 1px solid var(--border);
-            border-left: 4px solid var(--brown);
-            border-radius: 15px;
-            padding: 28px 32px;
-            margin-bottom: 24px;
-        }
-
-        .siprem-eyebrow {
-            color: var(--brown-light);
-            font-size: 12px;
-            font-weight: 800;
-            letter-spacing: 2px;
-            margin-bottom: 10px;
-        }
-
-        .siprem-hero-title {
-            color: #FFFFFF;
-            font-size: 32px;
-            font-weight: 800;
-            margin: 0 0 10px 0;
-            line-height: 1.2;
-        }
-
-        .siprem-hero-text {
-            color: var(--muted);
-            font-size: 15px;
-            line-height: 1.7;
-            margin: 0;
-        }
-
-        @media (max-width: 768px) {
-            .block-container {
-                padding: 1.2rem 1rem 2rem 1rem;
-            }
-
-            .siprem-hero {
-                padding: 22px 20px;
-            }
-
-            .siprem-hero-title {
-                font-size: 26px;
-            }
-        }
-    </style>
-"""
-# ==============================================================
-# ESTILO VISUAL: SIPREM-BOVINO
-# ==============================================================
-st.markdown(
-    """
-    <style>
-        :root {
-            --bg: #171411;
-            --sidebar: #201A16;
-            --card: #282019;
-            --brown: #A8794E;
-            --brown-light: #C49A70;
-            --text: #FFFFFF;
-            --muted: #D0C5BA;
-            --border: #403329;
-        }
-
-        .stApp,
-        [data-testid="stAppViewContainer"],
-        [data-testid="stMain"] {
-            background-color: var(--bg) !important;
-            color: var(--text) !important;
-        }
-
-        .block-container {
-            max-width: 1500px;
-            padding-top: 2rem;
-            padding-bottom: 3rem;
-        }
-
-        header[data-testid="stHeader"] {
-            background-color: var(--bg) !important;
-            background-image: none !important;
-            box-shadow: none !important;
-        }
-
-        section[data-testid="stSidebar"] {
-            background-color: var(--sidebar) !important;
-            border-right: 1px solid var(--border);
-        }
-
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a,
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span {
-            color: #FFFFFF !important;
-        }
-
-        h1, h2, h3, h4, h5, h6 {
-            color: #FFFFFF !important;
-        }
-
-        p, .stCaption, [data-testid="stCaptionContainer"] {
-            color: var(--muted);
-        }
-
-        /* Métricas */
-        [data-testid="stMetric"] {
-            background: var(--card) !important;
-            border: 1px solid var(--border);
-            border-radius: 13px;
-            padding: 16px;
-        }
-
-        [data-testid="stMetricLabel"] {
-            color: var(--muted) !important;
-        }
-
-        [data-testid="stMetricValue"] {
-            color: var(--brown-light) !important;
-        }
-
-        /* Controles */
-        label,
-        [data-testid="stCheckbox"] label,
-        [data-testid="stRadio"] label {
-            color: #FFFFFF !important;
-        }
-
-        .stSelectbox div[data-baseweb="select"] > div,
-        .stMultiSelect div[data-baseweb="select"] > div,
-        .stTextInput input,
-        .stTextArea textarea,
-        .stDateInput input,
-        [data-baseweb="input"] > div {
-            background-color: var(--card) !important;
-            color: #FFFFFF !important;
-            border-color: var(--border) !important;
-            border-radius: 8px;
-        }
-
-        /* Texto y opciones de los selectores */
-        [data-baseweb="select"] *,
-        [data-baseweb="popover"] *,
-        [role="listbox"] *,
-        [role="option"] {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
-        }
-
-        [data-baseweb="popover"],
-        [data-baseweb="menu"],
-        [role="listbox"],
-        [role="option"] {
-            background-color: #000000 !important;
-        }
-
-        [role="option"]:hover,
-        [role="option"][aria-selected="true"],
-        [role="option"][data-focused="true"] {
-            background-color: var(--card) !important;
-            color: #FFFFFF !important;
-        }
-
-        input, textarea {
-            caret-color: #FFFFFF !important;
-        }
-
-        input::placeholder,
-        textarea::placeholder {
-            color: var(--muted) !important;
-            -webkit-text-fill-color: var(--muted) !important;
-            opacity: 1 !important;
-        }
-
-        /* Botones */
-        .stButton > button,
-        .stDownloadButton > button {
-            background-color: var(--brown) !important;
-            color: #FFFFFF !important;
-            border: 1px solid var(--brown);
-            border-radius: 9px;
-            font-weight: 650;
-            min-height: 42px;
-            transition: all 0.2s ease;
-        }
-
-        .stButton > button:hover,
-        .stDownloadButton > button:hover {
-            background-color: var(--brown-light) !important;
-            border-color: var(--brown-light) !important;
-            color: #171411 !important;
-        }
-
-        /* Tablas, formularios y paneles */
-        [data-testid="stDataFrame"],
-        [data-testid="stTable"],
-        [data-testid="stForm"],
-        [data-testid="stExpander"] {
-            border: 1px solid var(--border);
-            border-radius: 10px;
-        }
-
-        [data-testid="stExpander"] {
-            background-color: var(--card) !important;
-        }
-
-        [data-testid="stExpander"] summary {
-            color: #FFFFFF !important;
-        }
-
-        hr {
-            border-color: var(--border) !important;
-        }
-
-        [data-testid="stAlert"] {
-            border-radius: 10px;
-        }
-
-        @media (max-width: 768px) {
-            .block-container {
-                padding: 1.2rem 1rem 2rem 1rem;
-            }
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
