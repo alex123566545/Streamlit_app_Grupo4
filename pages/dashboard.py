@@ -914,3 +914,270 @@ with st.expander(
         "variable explícita con animales muertos y, para una tasa, "
         "el número de animales expuestos."
     )
+"""
+ <style>
+        :root {
+            --bg: #171411;
+            --sidebar: #201A16;
+            --card: #282019;
+            --brown: #A8794E;
+            --brown-light: #C49A70;
+            --text: #FFFFFF;
+            --muted: #D0C5BA;
+            --border: #403329;
+        }
+
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"] {
+            background-color: var(--bg) !important;
+            color: var(--text);
+        }
+
+        .block-container {
+            max-width: 1500px;
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+
+        /* Header superior de Streamlit */
+        header[data-testid="stHeader"],
+        header[data-testid="stHeader"] [data-testid="stToolbar"] {
+            background-color: var(--bg) !important;
+            background-image: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Menú lateral */
+        section[data-testid="stSidebar"] {
+            background-color: var(--sidebar);
+            border-right: 1px solid var(--border);
+        }
+
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span {
+            color: #FFFFFF !important;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            color: #FFFFFF !important;
+            letter-spacing: -0.35px;
+        }
+
+        p, .stMarkdown, .stCaption,
+        [data-testid="stCaptionContainer"] {
+            color: var(--muted);
+        }
+
+        label,
+        [data-testid="stCheckbox"] label,
+        [data-testid="stRadio"] label {
+            color: #FFFFFF !important;
+        }
+
+        /* Tarjetas de métricas */
+        [data-testid="stMetric"] {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 13px;
+            padding: 16px;
+        }
+
+        [data-testid="stMetricLabel"] {
+            color: var(--muted) !important;
+        }
+
+        [data-testid="stMetricValue"] {
+            color: var(--brown-light) !important;
+        }
+
+        [data-testid="stMetricDelta"] {
+            color: var(--muted) !important;
+        }
+
+        /* Tablas */
+        [data-testid="stDataFrame"],
+        [data-testid="stTable"] {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        /* Campos de entrada generales */
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stTextInput input,
+        .stTextArea textarea,
+        .stDateInput input,
+        [data-baseweb="input"] > div,
+        [data-baseweb="textarea"] > div {
+            background-color: var(--card) !important;
+            color: #FFFFFF !important;
+            border-color: var(--border) !important;
+            border-radius: 8px;
+        }
+
+        .stTextInput input,
+        .stTextArea textarea,
+        .stDateInput input,
+        [data-baseweb="input"] input,
+        [data-baseweb="textarea"] textarea {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            caret-color: #FFFFFF !important;
+        }
+
+        /* Opciones desplegables */
+        [data-baseweb="select"] *,
+        [data-baseweb="popover"] *,
+        [role="listbox"] *,
+        [role="option"] {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        [role="listbox"],
+        [role="option"] {
+            background-color: #000000 !important;
+        }
+
+        [role="option"]:hover,
+        [role="option"][data-focused="true"],
+        [role="option"][aria-selected="true"] {
+            background-color: var(--card) !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        /* Selector de predicción: fondo negro y texto blanco */
+        input[aria-label="Seleccione la predicción"],
+        input[aria-label="Seleccione la predicción"]:hover,
+        input[aria-label="Seleccione la predicción"]:focus,
+        input[aria-label="Seleccione la predicción"]:active,
+        div[data-baseweb="select"] input {
+            background-color: #000000 !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            caret-color: #FFFFFF !important;
+            opacity: 1 !important;
+            border-color: var(--border) !important;
+        }
+
+        div[data-baseweb="select"] > div {
+            background-color: #000000 !important;
+            color: #FFFFFF !important;
+            border-color: var(--border) !important;
+        }
+
+        div[data-baseweb="select"] [role="combobox"],
+        div[data-baseweb="select"] [role="combobox"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+
+        input[aria-label="Seleccione la predicción"]::placeholder,
+        input::placeholder,
+        textarea::placeholder {
+            color: var(--muted) !important;
+            -webkit-text-fill-color: var(--muted) !important;
+            opacity: 1 !important;
+        }
+
+        /* Botones marrones */
+        .stButton > button,
+        .stFormSubmitButton > button,
+        [data-testid="stDownloadButton"] > button {
+            background-color: var(--brown);
+            color: #FFFFFF !important;
+            border: 1px solid var(--brown);
+            border-radius: 9px;
+            font-weight: 650;
+            min-height: 42px;
+            transition: all 0.2s ease;
+        }
+
+        .stButton > button:hover,
+        .stFormSubmitButton > button:hover,
+        [data-testid="stDownloadButton"] > button:hover {
+            background-color: var(--brown-light);
+            border-color: var(--brown-light);
+            color: #171411 !important;
+        }
+
+        .stButton > button:disabled,
+        .stFormSubmitButton > button:disabled,
+        [data-testid="stDownloadButton"] > button:disabled {
+            background-color: #514438;
+            color: #BDB1A5 !important;
+            border-color: #514438;
+        }
+
+        /* Formularios y paneles */
+        [data-testid="stForm"],
+        [data-testid="stExpander"] {
+            background-color: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        [data-testid="stExpander"] summary {
+            color: #FFFFFF !important;
+        }
+
+        hr {
+            border-color: var(--border) !important;
+        }
+
+        [data-testid="stAlert"] {
+            border-radius: 10px;
+        }
+
+        /* Encabezado principal, si se usa en la página */
+        .siprem-hero {
+            background: linear-gradient(135deg, #302319, #211A15);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--brown);
+            border-radius: 15px;
+            padding: 28px 32px;
+            margin-bottom: 24px;
+        }
+
+        .siprem-eyebrow {
+            color: var(--brown-light);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+        }
+
+        .siprem-hero-title {
+            color: #FFFFFF;
+            font-size: 32px;
+            font-weight: 800;
+            margin: 0 0 10px 0;
+            line-height: 1.2;
+        }
+
+        .siprem-hero-text {
+            color: var(--muted);
+            font-size: 15px;
+            line-height: 1.7;
+            margin: 0;
+        }
+
+        @media (max-width: 768px) {
+            .block-container {
+                padding: 1.2rem 1rem 2rem 1rem;
+            }
+
+            .siprem-hero {
+                padding: 22px 20px;
+            }
+
+            .siprem-hero-title {
+                font-size: 26px;
+            }
+        }
+    </style>
+"""
