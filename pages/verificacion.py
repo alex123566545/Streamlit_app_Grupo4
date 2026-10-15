@@ -16,7 +16,7 @@ st.set_page_config(
 # ==============================================================
 st.markdown(
     """
-     <style>
+    <style>
         :root {
             --bg: #171411;
             --sidebar: #201A16;
@@ -41,7 +41,6 @@ st.markdown(
             padding-bottom: 3rem;
         }
 
-        /* Header superior de Streamlit */
         header[data-testid="stHeader"],
         header[data-testid="stHeader"] [data-testid="stToolbar"] {
             background-color: var(--bg) !important;
@@ -49,7 +48,6 @@ st.markdown(
             box-shadow: none !important;
         }
 
-        /* Menú lateral */
         section[data-testid="stSidebar"] {
             background-color: var(--sidebar);
             border-right: 1px solid var(--border);
@@ -104,7 +102,7 @@ st.markdown(
             overflow: hidden;
         }
 
-        /* Campos de entrada generales */
+        /* Campos de entrada */
         .stSelectbox div[data-baseweb="select"] > div,
         .stTextInput input,
         .stTextArea textarea,
@@ -151,7 +149,7 @@ st.markdown(
             -webkit-text-fill-color: #FFFFFF !important;
         }
 
-        /* Selector de predicción: fondo negro y texto blanco */
+        /* Selector de predicción */
         input[aria-label="Seleccione la predicción"],
         input[aria-label="Seleccione la predicción"]:hover,
         input[aria-label="Seleccione la predicción"]:focus,
@@ -185,7 +183,7 @@ st.markdown(
             opacity: 1 !important;
         }
 
-        /* Botones marrones */
+        /* Botones */
         .stButton > button,
         .stFormSubmitButton > button,
         [data-testid="stDownloadButton"] > button {
@@ -234,7 +232,7 @@ st.markdown(
             border-radius: 10px;
         }
 
-        /* Encabezado principal, si se usa en la página */
+        /* Encabezado principal */
         .siprem-hero {
             background: linear-gradient(135deg, #302319, #211A15);
             border: 1px solid var(--border);
@@ -285,6 +283,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 # ==============================================================
 # CONFIGURACIÓN
 # ==============================================================
@@ -295,11 +294,59 @@ MARGEN_ALERTA_UMBRAL = 0.10
 
 
 # ==============================================================
+# FUNCIONES AUXILIARES
+# ==============================================================
+def texto_riesgo(valor):
+    if valor is True:
+        return "ALTO"
+    if valor is False:
+        return "BAJO"
+    return "DESCONOCIDO"
+
+
+def fecha_a_date(valor):
+    if valor is None or pd.isna(valor):
+        return None
+
+    if hasattr(valor, "date"):
+        return valor.date()
+
+    if isinstance(valor, date):
+        return valor
+
+    return None
+
+
+def opcion_intervencion_actual(valor):
+    if pd.isna(valor):
+        return "No registrado todavía"
+
+    return "Sí" if bool(valor) else "No"
+
+
+def es_zona_gris(
+    riesgo_alto_predicho,
+    probabilidad,
+    umbral,
+    margen=MARGEN_ALERTA_UMBRAL,
+):
+    """Detecta predicciones BAJO cuya probabilidad está cerca del umbral."""
+    if riesgo_alto_predicho is True:
+        return False
+
+    if pd.isna(probabilidad) or pd.isna(umbral):
+        return False
+
+    return (umbral - probabilidad) < margen
+
+
+# ==============================================================
 # CARGAR PREDICCIONES
 # ==============================================================
 @st.cache_data(ttl=30)
 def cargar_predicciones():
     conn = get_connection()
+
     try:
         query = """
             SELECT
@@ -324,6 +371,7 @@ def cargar_predicciones():
             ORDER BY fecha DESC, id_lote ASC;
         """
         return pd.read_sql(query, conn)
+
     finally:
         conn.close()
 
@@ -403,55 +451,6 @@ def actualizar_prediccion(
 
 
 # ==============================================================
-# FUNCIONES AUXILIARES
-# ==============================================================
-def texto_riesgo(valor):
-    if valor is True:
-        return "ALTO"
-    if valor is False:
-        return "BAJO"
-    return "DESCONOCIDO"
-
-
-def fecha_a_date(valor):
-    if valor is None or pd.isna(valor):
-        return None
-
-    if hasattr(valor, "date"):
-        return valor.date()
-
-    if isinstance(valor, date):
-        return valor
-
-    return None
-
-
-def opcion_intervencion_actual(valor):
-    if pd.isna(valor):
-        return "No registrado todavía"
-
-    return "Sí" if bool(valor) else "No"
-
-
-def es_zona_gris(
-    riesgo_alto_predicho,
-    probabilidad,
-    umbral,
-    margen=MARGEN_ALERTA_UMBRAL,
-):
-    """
-    Detecta predicciones BAJO cuya probabilidad está cerca del umbral.
-    """
-    if riesgo_alto_predicho is True:
-        return False
-
-    if pd.isna(probabilidad) or pd.isna(umbral):
-        return False
-
-    return (umbral - probabilidad) < margen
-
-
-# ==============================================================
 # ENCABEZADO
 # ==============================================================
 st.markdown(
@@ -470,8 +469,26 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if "guardado_en_proceso" not in st.session_state:
-    st.session_state.guardado_en_proceso = False
+
+# ==============================================================
+# ALERTA PERSISTENTE DESPUÉS DE GUARDAR
+# ==============================================================
+# La alerta se guarda en session_state antes del rerun para que
+# siga visible después de actualizar los datos.
+if "alerta_guardado" in st.session_state:
+    alerta = st.session_state.pop("alerta_guardado")
+
+    if alerta["tipo"] == "success":
+        st.success(alerta["mensaje"], icon="✅")
+
+    elif alerta["tipo"] == "warning":
+        st.warning(alerta["mensaje"], icon="⚠️")
+
+    elif alerta["tipo"] == "error":
+        st.error(alerta["mensaje"], icon="❌")
+
+    else:
+        st.info(alerta["mensaje"])
 
 
 # ==============================================================
@@ -568,7 +585,6 @@ st.divider()
 
 # ==============================================================
 # ESTADO ACTUAL POR LOTE
-# Solo la predicción más reciente de cada lote.
 # ==============================================================
 st.subheader("📌 Estado actual por lote")
 
@@ -611,8 +627,12 @@ tabla_estado_actual.rename(
 )
 
 tabla_estado_actual["Probabilidad"] = (
-    tabla_estado_actual["Probabilidad"].astype(float) * 100
-).round(1).astype(str) + "%"
+    pd.to_numeric(tabla_estado_actual["Probabilidad"], errors="coerce")
+    .mul(100)
+    .round(1)
+    .astype(str)
+    + "%"
+)
 
 tabla_estado_actual["Cerca del umbral"] = (
     tabla_estado_actual["Cerca del umbral"]
@@ -673,12 +693,20 @@ else:
     )
 
     tabla_listas["Probabilidad"] = (
-        tabla_listas["Probabilidad"].astype(float) * 100
-    ).round(1).astype(str) + "%"
+        pd.to_numeric(tabla_listas["Probabilidad"], errors="coerce")
+        .mul(100)
+        .round(1)
+        .astype(str)
+        + "%"
+    )
 
     tabla_listas["Umbral"] = (
-        tabla_listas["Umbral"].astype(float) * 100
-    ).round(1).astype(str) + "%"
+        pd.to_numeric(tabla_listas["Umbral"], errors="coerce")
+        .mul(100)
+        .round(1)
+        .astype(str)
+        + "%"
+    )
 
     tabla_listas["Cerca del umbral"] = (
         tabla_listas["Cerca del umbral"]
@@ -740,7 +768,9 @@ with c6:
     )
 
 
-# Aplicar filtros.
+# ==============================================================
+# APLICAR FILTROS
+# ==============================================================
 df_filtrado = df.copy()
 
 if filtro_lote != "Todos":
@@ -812,12 +842,20 @@ tabla.rename(
 )
 
 tabla["Probabilidad"] = (
-    tabla["Probabilidad"].astype(float) * 100
-).round(2).astype(str) + "%"
+    pd.to_numeric(tabla["Probabilidad"], errors="coerce")
+    .mul(100)
+    .round(2)
+    .astype(str)
+    + "%"
+)
 
 tabla["Umbral"] = (
-    tabla["Umbral"].astype(float) * 100
-).round(1).astype(str) + "%"
+    pd.to_numeric(tabla["Umbral"], errors="coerce")
+    .mul(100)
+    .round(1)
+    .astype(str)
+    + "%"
+)
 
 tabla["Zona gris"] = tabla["Zona gris"].map(
     {True: "⚠️ Sí", False: "—"}
@@ -1220,7 +1258,6 @@ else:
 guardar = st.button(
     "💾 Guardar cambios",
     use_container_width=True,
-    disabled=st.session_state.guardado_en_proceso,
 )
 
 if guardar:
@@ -1344,20 +1381,34 @@ if guardar:
             target_real=target_db,
         )
 
+        # Guardar la alerta ANTES de recargar la página.
         if verificado_db:
-            st.success(
-                "✅ Predicción verificada. El registro ya cumple "
-                "las condiciones para aparecer en la vista de verificadas."
-            )
+            st.session_state["alerta_guardado"] = {
+                "tipo": "success",
+                "mensaje": (
+                    "¡Cambios guardados correctamente! "
+                    "La predicción quedó verificada y el resultado "
+                    "real se guardó en Supabase."
+                ),
+            }
         else:
-            st.success(
-                "✅ Seguimiento guardado. La predicción continúa "
-                "pendiente de verificación."
-            )
+            st.session_state["alerta_guardado"] = {
+                "tipo": "success",
+                "mensaje": (
+                    "¡Cambios guardados correctamente! "
+                    "El seguimiento se actualizó en Supabase. "
+                    "La predicción continúa pendiente de verificación."
+                ),
+            }
 
-        st.cache_data.clear()
+        # Invalidar el caché y recargar. La alerta se mostrará
+        # al inicio de la siguiente ejecución.
+        cargar_predicciones.clear()
         st.rerun()
 
     except Exception as e:
-        st.error("❌ No se pudo actualizar la predicción.")
+        st.error(
+            "No se pudieron guardar los cambios en Supabase. "
+            "Revise la conexión e inténtelo nuevamente."
+        )
         st.exception(e)
