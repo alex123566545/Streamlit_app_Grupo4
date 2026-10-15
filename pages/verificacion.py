@@ -1,3 +1,5 @@
+import html
+
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -263,6 +265,58 @@ st.markdown(
             font-size: 15px;
             line-height: 1.7;
             margin: 0;
+        }
+
+        /* Alerta que aparece al guardar: fondo claro y letras negras */
+        .siprem-alerta {
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin: 0 0 16px 0;
+            font-size: 15px;
+            line-height: 1.5;
+            font-weight: 600;
+            color: #000000 !important;
+            border: 1px solid transparent;
+        }
+
+        .siprem-alerta,
+        .siprem-alerta * {
+            color: #000000 !important;
+            -webkit-text-fill-color: #000000 !important;
+        }
+
+        .siprem-alerta-success {
+            background-color: #D9F2DD;
+            border-color: #7BC48A;
+        }
+
+        .siprem-alerta-warning {
+            background-color: #FFF1C2;
+            border-color: #E6C65C;
+        }
+
+        .siprem-alerta-error {
+            background-color: #F8D7DA;
+            border-color: #E39BA1;
+        }
+
+        .siprem-alerta-info {
+            background-color: #D6E9F8;
+            border-color: #8DB9DE;
+        }
+
+        /* Aviso flotante (toast): fondo claro y letras negras */
+        [data-testid="stToast"],
+        [data-testid="stToastContainer"] > div {
+            background-color: #D9F2DD !important;
+            border: 1px solid #7BC48A !important;
+            border-radius: 10px !important;
+        }
+
+        [data-testid="stToast"] *,
+        [data-testid="stToastContainer"] > div * {
+            color: #000000 !important;
+            -webkit-text-fill-color: #000000 !important;
         }
 
         @media (max-width: 768px) {
@@ -545,21 +599,28 @@ st.markdown(
 if "alerta_guardado" in st.session_state:
     alerta = st.session_state.pop("alerta_guardado")
 
-    if alerta["tipo"] == "success":
-        st.success(alerta["mensaje"], icon="✅")
-        st.toast(alerta["mensaje"], icon="✅")
+    tipo_alerta = alerta["tipo"]
 
-    elif alerta["tipo"] == "warning":
-        st.warning(alerta["mensaje"], icon="⚠️")
-        st.toast(alerta["mensaje"], icon="⚠️")
+    if tipo_alerta not in ("success", "warning", "error", "info"):
+        tipo_alerta = "info"
 
-    elif alerta["tipo"] == "error":
-        st.error(alerta["mensaje"], icon="❌")
-        st.toast(alerta["mensaje"], icon="❌")
+    iconos_alerta = {
+        "success": "✅",
+        "warning": "⚠️",
+        "error": "❌",
+        "info": "ℹ️",
+    }
 
-    else:
-        st.info(alerta["mensaje"])
-        st.toast(alerta["mensaje"], icon="ℹ️")
+    st.markdown(
+        f"""
+        <div class="siprem-alerta siprem-alerta-{tipo_alerta}">
+            {iconos_alerta[tipo_alerta]}&nbsp; {html.escape(alerta["mensaje"])}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.toast(alerta["mensaje"], icon=iconos_alerta[tipo_alerta])
 
 if st.session_state.pop("cerrar_combos", False):
     cerrar_combos_y_subir()
